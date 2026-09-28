@@ -1,5 +1,7 @@
 # 完整工作流
 
+本文件企业双Key及bootstrap要求仅针对API模式。用户明确要求已登录网页或禁止付费API时，先读 `browser-enterprise.md`，不执行这里的企业付费预检。
+
 ## 0. 选择工作模式
 
 ### 类目发现模式
@@ -19,11 +21,11 @@
 7. 输出六类信息：概览、正式招商商家、主体核验、未确认字段、原始输入、口径说明。工作簿注明“用户指定名单，不代表Top30或主营准入达标”。
 8. 企业接口额度不足时保留已取得结果，并把其余店铺写入未确认字段；不得为了补企业信息改走淘宝采集。
 
-名单模式的环境检查使用 `powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1 -SkipTaobaoCheck`。只有用户另行明确要求执行商品结构准入审计时，才把指定名单作为审计队列并进入类目发现模式的淘宝步骤。
+名单默认网页查询，先读 `browser-enterprise.md`；仅授权付费API时使用 `powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1 -AllowPaidApi -SkipTaobaoCheck`。只有用户另行明确要求执行商品结构准入审计时，才把指定名单作为审计队列并进入类目发现模式的淘宝步骤。
 
 ## 1. 预检
 
-先运行 `powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1`。该脚本检测并补齐 Python 3.11+、`openpyxl`、`requests`、`o2`、`webcli`、`qcc-company` MCP 与风鸟 Skill。企业预检是硬门槛：企查查 Key 与风鸟 Key 必须同时存在并分别通过轻量验证，风鸟公共额度和其他企业 MCP 均不能替代。缺 Key 时同时提供 <https://agent.qcc.com/profile/api-key> 与 <https://www.riskbird.com/center/apiKey>，让用户把两个 Key 发给 Codex；Codex 通过 `configure_enterprise_keys.py` 标准输入自动配置，不让用户自行设置环境变量，也不在回复中复述 Key。
+网页任务先经 `browser-task-router` 检查所需连接和登录；`scripts/bootstrap.ps1` 默认只做本地检查，审核用 `-AuditOnly`。API任务必须已有明确付费授权，才加 `-AllowPaidApi`，名单再加 `-SkipTaobaoCheck`；仅API模式要求两个私有Key均通过验证。缺Key时按 `references/mcp-setup.md` 引导隐藏输入配置，不把密钥放进聊天、参数或日志，不要求用户手工配置环境变量。
 
 webcli 只有在 `connectivity.ok=true` 且至少一个 profile 的 `extensionConnected=true` 时才通过。未连接时运行 `webcli extension install`，然后引导用户在 Chrome 打开 `chrome://extensions`、开启开发者模式、加载 `~/.webcli/extension`、固定 Browser Bridge 并保持 Chrome 开启。名单模式继续使用 `-SkipTaobaoCheck`，配置企业源时不得打开淘宝页面。
 
@@ -51,7 +53,7 @@ webcli 只有在 `connectivity.ok=true` 且至少一个 profile 的 `extensionCo
 
 用户明确指定每类销量Top N时，审计队列使用 `sales_top_n_mode=true`：按该类目标商品付款人数展示下限降序只取前N家，`max_candidate_shops=N`，不扩展到全部原始候选；审计后不足N家不得用低质量商家补位。
 
-正式门槛：目标SPU≥10且目标占比≥30%。占比≥50%为高匹配。
+搜索样本初筛门槛：目标SPU≥10且样本占比≥30%。占比≥50%为样本高匹配。默认两页按店名搜索只能证明样本组成，不代表全店主营占比；未完成店内全量分页验证时，不得宣称全店覆盖完整。
 
 ## 5. 店铺身份
 
@@ -59,7 +61,7 @@ webcli 只有在 `connectivity.ok=true` 且至少一个 profile 的 `extensionCo
 
 ## 6. 企业主体
 
-先运行 `python scripts/company_source_routing.py` 生成查询计划，再结合店铺资质页、相关类别商标权利人、品牌官网或商品包装生产主体、与商品品类一致的同名生产/运营公司。
+执行入口为 `python scripts/enterprise_pipeline.py --job-dir <绝对任务目录> --limit 1`，默认网页只规划，在已授权范围内加 `--execute`；搜索/详情、联系人证据和恢复见 `references/browser-enterprise.md`。仅用户重新明确授权付费API后才加 `--mode paid-api --allow-paid-api`，执行下述双源路线，详见 `references/enterprise-workflow.md`。`company_source_routing.py` 仅解释API查询路线，计划不等于已完成企业核验。
 
 - 只有店铺名或品牌名：风鸟模糊发现 → 企查查精确核验 → 风鸟补缺。
 - 已有公司全称或统一社会信用代码：企查查精确核验 → 风鸟补缺。
@@ -79,7 +81,7 @@ webcli 只有在 `connectivity.ok=true` 且至少一个 profile 的 `extensionCo
 
 ## 8. 验收
 
-- 正式记录全部满足SPU和占比门槛
+- 正式记录全部满足声明的样本SPU和占比门槛；不把样本口径替换为全店口径
 - 淘宝、天猫均未因平台类型被过滤
 - 公式重算后无错误
 - 公司字段与候选证据可追溯

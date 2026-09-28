@@ -115,6 +115,7 @@ class RecordingBrowser:
             requested_url=self.assigned_urls[-1] if self.assigned_urls else "",
             final_url=self.final_url,
             products=tuple(self.pages.get(source_type, [])),
+            evidence_complete=True,
         )
 
     def open_hot_sales(self, final_url):
@@ -280,7 +281,7 @@ class ReviewBrowserTests(unittest.TestCase):
         self.assertEqual(result.official_shop_url, "https://brand.tmall.com/")
         self.assertEqual(result.sources[-1]["final_url"], "https://s.taobao.com/search?q=brand&tab=shop")
 
-    def test_stops_after_home_page_when_products_exist(self):
+    def test_stops_after_home_page_when_complete_coverage_is_provided(self):
         browser = RecordingBrowser(pages={"shop_home": [product("1", 10000)]})
         checkpoint = Path(tempfile.mkdtemp()) / "checkpoint.json"
         task = ReviewTask(shop_name="甲店", shop_url="https://shop.taobao.com/a")

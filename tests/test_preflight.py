@@ -16,6 +16,16 @@ from preflight import detect_fengniao, detect_mcp
 
 
 class PreflightTests(unittest.TestCase):
+    def test_enterprise_only_does_not_require_browser_or_o2(self):
+        result = preflight.build_status(
+            audit_only=False, enterprise_only=True, runtime={"ok": True}, packages={"ok": True},
+            o2_path=None, doctor={"ok": False}, browser_ready=False, taobao=None, mcps=[],
+            qcc={"configured": True, "key_configured": True, "validated": True},
+            fengniao={"installed": True, "key_configured": True, "validated": True}, actions=[],
+        )
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["next"])
+
     def test_detects_qcc_and_other_enterprise_mcp(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "config.toml"
@@ -94,6 +104,23 @@ class PreflightTests(unittest.TestCase):
         self.assertTrue(result["validated"])
         self.assertNotIn("sample-qcc-value", str(result))
         self.assertEqual(post.call_args.kwargs["json"]["method"], "tools/list")
+
+    @patch("preflight.requests.post")
+    def test_qcc_http_200_without_tools_payload_is_not_ready(self, post):
+        for text in ("", "<html>login required</html>", '{"result":{}}'):
+            post.return_value = Mock(status_code=200, text=text)
+            result = preflight.validate_qcc({"configured": True, "url": "https://example.invalid"}, auth="fixture-auth")
+            self.assertFalse(result["validated"])
+
+    @patch("preflight.requests.post")
+    def test_qcc_sse_without_charset_is_decoded_as_utf8(self, post):
+        response = preflight.requests.Response()
+        response.status_code = 200
+        response.encoding = "ISO-8859-1"
+        response._content = ('data: ' + json.dumps({"result": {"tools": [{"name": "test", "description": "内网企业工具"}]}}, ensure_ascii=False)).encode("utf-8")
+        post.return_value = response
+        result = preflight.validate_qcc({"configured": True, "url": "https://example.invalid"}, auth="fixture-auth")
+        self.assertTrue(result["validated"])
 
     def test_qcc_direct_client_accepts_raw_or_prefixed_token(self):
         from enrich_companies import QccClient, load_qcc_server
@@ -323,7 +350,7 @@ class PreflightTests(unittest.TestCase):
         qcc = {"configured": True, "key_configured": False, "url": "https://agent.qcc.com/mcp/company/stream"}
         fengniao = {"installed": True, "key_configured": True, "ready": True, "path": "fengniao"}
         with tempfile.TemporaryDirectory() as directory, patch.object(
-            sys, "argv", ["preflight.py", "--config", str(Path(directory) / "config.toml")]
+            sys, "argv", ["preflight.py", "--allow-paid-api", "--config", str(Path(directory) / "config.toml")]
         ), patch("preflight.python_runtime_status", return_value={"ok": True}), patch(
             "preflight.python_packages_status", return_value={"ok": True}
         ), patch("preflight.find_o2", return_value="o2"), patch(

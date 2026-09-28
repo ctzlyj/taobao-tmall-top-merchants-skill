@@ -32,13 +32,15 @@
 
 每个店铺记录：`exact_shop_spu_seen`、`target_spu`、`electric_spu`、`accessory_spu`、`unrelated_spu`、`target_share`、`passes_minimum`、`match_grade`、目标商品明细。
 
+搜索反聚合必须标记 `measurement_scope: shop_name_search_sample`、`inventory_complete: false`、`sample_target_share` 和 `full_store_target_share: null`。旧字段 `target_share` 仅兼容样本占比，不能解释为全店主营占比；旧缓存缺少这些字段时也不得推定全店完整。
+
 ## storefronts.json
 
 店铺正式URL、`shop_id`、`seller_id`、`shop_type`、页面信号、采集时间。
 
 ## platform_qualifications.json
 
-按店铺保存淘宝/天猫平台营业执照原文提取结果。至少包含：`status`、`evidence_type: platform_qualification`、`company_name`、`credit_code`、`legal_person`、`address`、`established`、`source_url`。`status: verified` 要求公司名与信用代码同时存在；截图或页面不完整时写 `incomplete`，遇验证码、滑块或 `_____tmd__` 写 `risk_control`。
+按店铺保存淘宝/天猫平台营业执照原文提取结果。至少包含：`status`、`evidence_type: platform_qualification`、`company_name`、`credit_code`、`legal_person`、`address`、`established`、`source_url`。`status: verified` 要求公司名、信用代码、资质类型与来源同时存在；截图或页面不完整时写 `incomplete`，遇验证码、滑块或 `_____tmd__` 写 `risk_control`。`storefronts.json` 内嵌字段不能替代本文件。
 
 该文件是正式主体的最高优先级锚点。存在 `verified` 记录时，正式表 `company` 和 `credit_code` 必须与其一致；企业搜索、商标或品牌官网返回的其他公司只能作为“建联候选公司（非店铺主体，待核验）”。
 
@@ -58,7 +60,13 @@
 
 确认主体的工商登记与联系方式原始返回。每个候选保留 `selected`、`evidence`、`registration` 和 `contact`；数据来源写入 `evidence` 或单独的 `source` 字段。缺失值保持空白；电话和邮箱全部去重保留，不做条数截断。
 
+双源编排额外保存 `field_sources`、`source_conflicts`、`dual_source_verified`、`fengniao_registration` 和 `captured_at`。`dual_source_verified` 只证明企业数据跨源一致，不确认与店铺的关系。企查查明确返回“已全量扫描该主体联系方式数据库，未发现任何记录。”时，标准化为空电话/邮箱及 `contact_status: not_disclosed`，保留原始返回与商家；不是系统故障。其他未知响应结构必须暂停，不按空数据静默吞掉。
+
+`enterprise_calls.json` 与 `enterprise_checkpoint.json` 保存限时成功缓存、计划指纹、来源与暂停恢复状态，详见企业执行参考。失败或无效数据结构不能写为成功缓存。
+
 ## 工作簿
+
+联系人交付记录按“企业+号码”逐项绑定来源、读取时间、姓名/称呼、职务、确认状态及建议开场，遵循 `browser-enterprise.md` 的固定交付模板。原始企业电话和法人字段保持不变，不能为凑联系人而改写源返回或缓存；没有明确对应证据时联系人留空、展示为未确认。原工作簿无联系人列时，在本地交付说明中补齐，不能擅改用户模板或声称旧生成器已自动写入这些字段。
 
 正式表字段至少包括：类目、平台/店铺类型、店铺名、目标SPU、精确店铺SPU、相关占比、匹配等级、付款展示下限、店铺链接、shopId/sellerId、平台营业执照公司名称/信用代码、主体一致性、建联候选公司（非店铺主体，待核验）/电话/邮箱/地址、建联提示、已确认公司名称、法人、电话、邮箱、注册地址、成立日期、信用代码、主体角色/置信度、来源和待确认项。候选建联字段不得被解释为已确认店铺主体。
 

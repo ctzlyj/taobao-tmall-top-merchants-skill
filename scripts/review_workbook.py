@@ -19,6 +19,8 @@ from audit_review_shops import (
     audit_queue,
     normalize_shop_name,
     normalize_url,
+    normalize_official_shop_url,
+    rule_fingerprint,
 )
 
 
@@ -188,12 +190,12 @@ def select_review_rows(workbook, tables, owner):
 def group_pending_rows(rows):
     grouped = {}
     for row in rows:
-        key = normalize_shop_name(row.shop_name)
+        key = (normalize_shop_name(row.shop_name), rule_fingerprint(row.category))
         grouped.setdefault(key, []).append(row)
     tasks = []
     for grouped_rows in grouped.values():
         first = grouped_rows[0]
-        urls = {row.shop_url for row in grouped_rows if row.shop_url}
+        urls = {normalize_official_shop_url(row.shop_url) for row in grouped_rows if row.shop_url}
         if len(urls) > 1:
             non_ad_urls = {url for url in urls if "click.simba.taobao.com" not in url.lower()}
             if len(non_ad_urls) > 1:
@@ -201,7 +203,7 @@ def group_pending_rows(rows):
         tasks.append(
             ReviewTask(
                 shop_name=first.shop_name,
-                shop_url=first.shop_url,
+                shop_url=next((row.shop_url for row in grouped_rows if row.shop_url), ""),
                 category=first.category,
                 source_rows=tuple((row.sheet_name, row.row_number) for row in grouped_rows),
             )
@@ -219,9 +221,7 @@ def plan_review_workbook(source, owner=None, category=""):
     tables = discover_review_tables(workbook)
     selected_owner = resolve_owner(workbook, tables, owner)
     selection = select_review_rows(workbook, tables, selected_owner)
-    tasks = group_pending_rows(selection.pending)
-    if category:
-        tasks = [replace(task, category=task.category or category) for task in tasks]
+    tasks = group_pending_rows([replace(row, category=row.category or category) for row in selection.pending])
     return {
         "source": str(source_path),
         "owner": selected_owner,
@@ -246,12 +246,16 @@ def _table_by_sheet(tables):
 def _completed_results(rows):
     results = {}
     for row in rows:
-        key = (normalize_shop_name(row.shop_name), normalize_url(row.shop_url))
+        key = review_key(row)
         value = (row.profile_result, row.priority)
         if key in results and results[key] != value:
             raise ReviewWorkbookError(f"conflicting completed results for {row.shop_name}")
         results[key] = value
     return results
+
+
+def review_key(row):
+    return (normalize_shop_name(row.shop_name), normalize_official_shop_url(row.shop_url), rule_fingerprint(row.category))
 
 
 def _decision_values(result):
@@ -414,17 +418,15 @@ def build_review_output(source, output, owner=None, checkpoint=None, auditor=Non
     tables = discover_review_tables(source_workbook)
     selected_owner = resolve_owner(source_workbook, tables, owner)
     selection = select_review_rows(source_workbook, tables, selected_owner)
-    existing_results = _completed_results(selection.completed)
+    existing_results = _completed_results([replace(row, category=row.category or category) for row in selection.completed])
     reusable_results = existing_results
-    tasks = group_pending_rows(selection.pending)
-    if category:
-        tasks = [replace(task, category=task.category or category) for task in tasks]
+    tasks = group_pending_rows([replace(row, category=row.category or category) for row in selection.pending])
 
     task_values = {}
     unresolved = []
     for task in tasks:
-        key = normalize_shop_name(task.shop_name)
-        workbook_key = (key, normalize_url(task.shop_url))
+        key = review_key(task)
+        workbook_key = key
         if workbook_key in reusable_results:
             task_values[key] = reusable_results[workbook_key]
         else:
@@ -434,10 +436,10 @@ def build_review_output(source, output, owner=None, checkpoint=None, auditor=Non
         browser = WebcliBrowserAdapter(session=session)
         audited_results = audit_queue(unresolved, browser, checkpoint_path)
         for task, result in zip(unresolved, audited_results, strict=True):
-            task_values[normalize_shop_name(task.shop_name)] = _decision_values(result)
+            task_values[review_key(task)] = _decision_values(result)
     elif unresolved:
         for task in unresolved:
-            task_values[normalize_shop_name(task.shop_name)] = _decision_values(auditor.audit(task))
+            task_values[review_key(task)] = _decision_values(auditor.audit(task))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source_path, output_path)
@@ -453,9 +455,9 @@ def build_review_output(source, output, owner=None, checkpoint=None, auditor=Non
     audited_shops = 0
 
     for task in tasks:
-        key = normalize_shop_name(task.shop_name)
+        key = review_key(task)
         values = task_values[key]
-        if (key, normalize_url(task.shop_url)) in reusable_results:
+        if key in reusable_results:
             reused_rows += len(task.source_rows)
         else:
             audited_shops += 1

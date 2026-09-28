@@ -1,5 +1,7 @@
 # 企业数据源首次配置
 
+仅适用于用户选择的API模式。用户要求不付费、API无额度或使用已登录网页时，先读 `browser-enterprise.md`，不要求配置Key或运行付费预检。
+
 ## 检测
 
 正式任务要求以下项目全部通过：
@@ -15,7 +17,7 @@
 - 企查查 Key：<https://agent.qcc.com/profile/api-key>
 - 风鸟 Key：<https://www.riskbird.com/center/apiKey>
 
-必须同时提供两个 Key。让用户把两个 Key 一次发给 Codex，不要让用户自行配置环境变量。Codex 不得复述 Key，也不得把 Key 放入命令参数、日志、工作簿、手册或 Git。
+必须同时提供两个 Key。引导用户在配置助手的隐藏输入中提交，不要求在聊天中粘贴完整凭证，不要让用户自行配置环境变量。Codex 不得复述 Key，也不得把 Key 放入命令参数、日志、工作簿、手册或 Git。
 
 Codex 启动以下助手，再通过标准输入依次传入企查查 Key 与风鸟 Key：
 
@@ -23,7 +25,7 @@ Codex 启动以下助手，再通过标准输入依次传入企查查 Key 与风
 python scripts/configure_enterprise_keys.py
 ```
 
-助手会自动兼容用户是否带 `Bearer` 前缀，将两个凭证写入 Windows 当前用户环境，并在 Codex 配置中只保存环境变量名称，不保存 Key 值。随后运行 `bootstrap.ps1` 做真实可用性验证。仓库内企查查脚本会直接读取该用户级配置；风鸟命令统一通过 `scripts/run_fengniao.py` 启动，因此当前 Codex 无需重启。
+助手会自动兼容用户是否带 `Bearer` 前缀，将两个凭证写入 Windows 当前用户环境，并在 Codex 配置中只保存环境变量名称，不保存 Key 值。在用户明确授权付费API后运行 `bootstrap.ps1 -AllowPaidApi` 做真实可用性验证。仓库内企查查脚本会直接读取该用户级配置；风鸟命令统一通过 `scripts/run_fengniao.py --allow-paid-api` 启动，因此当前 Codex 无需重启。
 
 ## webcli Browser Bridge
 
@@ -34,7 +36,7 @@ python scripts/configure_enterprise_keys.py
 3. 点击“加载已解压的扩展程序”。
 4. 选择预检打印的 `~/.webcli/extension` 准确目录。
 5. 将 Browser Bridge 固定到 Chrome 工具栏。
-6. 保持 Chrome 开启，再运行 `bootstrap.ps1`。
+6. 保持 Chrome 开启，再按Router核对所选浏览器连接；只有API模式另运行 `bootstrap.ps1 -AllowPaidApi`。
 
 只有 `connectivity.ok=true` 且至少一个 profile 的 `extensionConnected=true` 才算连接成功；顶层 `ok=true` 不足以通过。
 
@@ -49,9 +51,9 @@ npx -y openclaw@2026.7.1-2 skills install '@xinshu001/company-search-fengniao' -
 安装由预检自动完成。风鸟必须使用用户自己的 Key；公共额度不能替代。进入风鸟 Skill 目录后按以下顺序调用：
 
 ```powershell
-python scripts/run_fengniao.py discover "企业基本信息"
-python scripts/run_fengniao.py call biz_fuzzy_search --params '{"key":"企业或品牌中文名"}'
-python scripts/run_fengniao.py call biz_basic_info --params '{"entid":"上一步内部ID"}'
+python scripts/run_fengniao.py --allow-paid-api discover "企业基本信息"
+python scripts/run_fengniao.py --allow-paid-api call biz_fuzzy_search --params '{"key":"企业或品牌中文名"}'
+python scripts/run_fengniao.py --allow-paid-api call biz_basic_info --params '{"entid":"上一步内部ID"}'
 ```
 
 先用 `biz_fuzzy_search` 消歧，再用同一个内部 `entid` 查询基本信息。企业简称或品牌出现多个候选时不得直接取第一条。`entid` 不写入工作簿。

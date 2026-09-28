@@ -18,6 +18,8 @@ from common import BrowserTransientError, classify_item, make_search_script, par
 from create_job import create_job
 from crosscheck_trademarks import match_trademarks
 from verify_job import verify
+from workbook_formulas import cache_generated_formulas
+from common import load_job
 
 
 class PipelineTests(unittest.TestCase):
@@ -238,6 +240,7 @@ class PipelineTests(unittest.TestCase):
 
             sheet.cell(4, headers["公司名称"]).value = "东莞市艾佳E健身管理有限公司"
             loaded.save(workbook)
+            cache_generated_formulas(workbook, load_job(job_dir))
             with self.assertRaisesRegex(AssertionError, "正式主体与平台营业执照不一致"):
                 verify(job_dir, workbook)
 
@@ -600,11 +603,10 @@ class SkillMetadataTests(unittest.TestCase):
         self.assertIn("用户指定名单模式", text)
         for input_type in ["店铺名", "多个链接", "文本", "表格", "电子表格", "混合信息"]:
             self.assertIn(input_type, text)
-        self.assertIn("不运行 `mine_taobao.py`、`audit_shops.py`", text)
         self.assertIn("全部进入正式招商商家", text)
         self.assertIn("不得补造目标SPU、店内目标商品占比、付款人数展示下限或Top30结论", text)
         self.assertIn("用户指定名单，不代表Top30或主营准入达标", text)
-        self.assertIn("名单模式跳过第3至第7步", text)
+        self.assertIn("不为补企业字段打开淘宝", text)
         self.assertIn("不运行 `create_job.py`、`mine_taobao.py`、`audit_shops.py`、`audit_storefronts.py`", text)
 
     def test_skill_routes_independent_review_mode(self):

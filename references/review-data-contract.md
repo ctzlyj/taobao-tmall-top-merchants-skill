@@ -19,7 +19,7 @@
 
 ## Identity
 
-The provisional key is the normalized shop name. The completed `stable_identity` is the normalized shop name plus normalized final official shop URL. Supplied and redirected URLs are aliases. Conflicting official URLs for one normalized name pause the run.
+The store `stable_identity` is the normalized shop name plus normalized final official shop URL. A decision additionally binds `category` through `rule_fingerprint`, including classification rules and thresholds. Grouping, workbook reuse and checkpoints must not merge different categories. Supplied and redirected URLs are aliases, not permission to reuse a different shop or category. Conflicting official URLs for one normalized name pause the run.
 
 ## Product Evidence
 
@@ -40,10 +40,12 @@ SPU and `high_sales_links` are calculated after deduplication by `product_id`.
 
 ## Review Result
 
-Each completed shop record contains `shop_name`, `official_shop_url`, deduplicated evidence, source pages, `relevant_spu`, `high_sales_links`, `profile_result`, `priority`, and `complete`.
+Each completed shop record contains `shop_name`, `official_shop_url`, `category`, `rule_fingerprint`, timezone-aware `captured_at`, deduplicated evidence, source pages, `relevant_spu`, `high_sales_links`, `profile_result`, `priority`, and `complete`.
+
+Observed high-threshold evidence can prove a high result without inventory exhaustion. A low result requires explicit complete coverage and observable sales; having a category or one visible product is not proof of completeness. Missing sales remain unknown, not zero. Unresolved cases continue to fallback pages or remain pending.
 
 Allowed priorities are `高`, `中`, `低`, and `待核验`. A non-complete record must use `待核验` for both `profile_result` and priority.
 
 ## Checkpoint
 
-The JSON checkpoint contains `schema_version`, `status`, `completed`, `aliases`, `pending`, `current_task`, and a sanitized failure reason. Writes are atomic. Cookies, API keys, bearer tokens, Authorization headers, and browser storage are forbidden.
+The JSON checkpoint uses `schema_version: 2` and contains `status`, `completed`, `aliases`, `pending`, `current_task`, and a sanitized failure reason. Evidence expires after 24 hours or a rule/category change. Missing timestamps are not fresh. Version 1 checkpoints are preserved in `.v1.bak` before migration and never reused as version 2 decisions. Unknown versions fail closed. Writes are atomic. Cookies, API keys, bearer tokens, Authorization headers, and browser storage are forbidden.

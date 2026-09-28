@@ -2,12 +2,16 @@
 param(
     [switch]$SkipTaobaoCheck,
     [switch]$ConfigureEnterpriseKeys,
-    [switch]$AuditOnly
+    [switch]$AuditOnly,
+    [switch]$AllowPaidApi
 )
 
 $ErrorActionPreference = "Stop"
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $skillRoot = Split-Path -Parent $scriptRoot
+if ($ConfigureEnterpriseKeys -and -not $AllowPaidApi) {
+    throw "-ConfigureEnterpriseKeys requires explicit -AllowPaidApi. Browser mode needs no API keys."
+}
 
 if ($AuditOnly -and $SkipTaobaoCheck) {
     throw "-AuditOnly and -SkipTaobaoCheck cannot be combined."
@@ -67,11 +71,16 @@ if ($ConfigureEnterpriseKeys) {
     }
 }
 $arguments = @((Join-Path $scriptRoot "preflight.py"), "--install-missing")
+if ($AllowPaidApi) {
+    $arguments += "--allow-paid-api"
+}
 if ($AuditOnly) {
     $arguments += "--audit-only"
 }
 if (-not $SkipTaobaoCheck) {
     $arguments += "--check-taobao"
+} else {
+    $arguments += "--enterprise-only"
 }
 & $python @arguments
 exit $LASTEXITCODE

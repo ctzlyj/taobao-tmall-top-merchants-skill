@@ -10,6 +10,7 @@ import zipfile
 from pathlib import Path
 
 import requests
+from enrich_companies import decode_mcp_envelopes
 
 from configure_enterprise_keys import (
     FENGNIAO_ENV_NAME,
@@ -233,9 +234,14 @@ def validate_qcc(qcc, auth=None):
         return {"validated": False, "error": "request_failed"}
     if response.status_code < 200 or response.status_code >= 300:
         return {"validated": False, "error": f"http_{response.status_code}"}
-    if '"error"' in response.text and '"result"' not in response.text:
-        return {"validated": False, "error": "provider_rejected_request"}
-    return {"validated": True, "error": ""}
+    response.encoding = "utf-8"
+    for envelope in decode_mcp_envelopes(response.text):
+        if envelope.get("error"):
+            return {"validated": False, "error": "provider_rejected_request"}
+        result = envelope.get("result")
+        if isinstance(result, dict) and isinstance(result.get("tools"), list):
+            return {"validated": True, "error": ""}
+    return {"validated": False, "error": "invalid_provider_response"}
 
 
 def validate_fengniao(skill_dir, key=None):
@@ -282,21 +288,22 @@ def review_structure_status(root=None):
 
 def build_status(
     *, audit_only, runtime, packages, o2_path, doctor, browser_ready, taobao,
-    mcps, qcc, fengniao, actions, review_structure=None,
+    mcps, qcc, fengniao, actions, review_structure=None, enterprise_only=False,
 ):
     enterprise_ready = enterprise_sources_ready(qcc, fengniao)
     structure = review_structure or {"ok": True, "missing": []}
     required_ready = (
         runtime["ok"]
         and packages["ok"]
-        and bool(o2_path)
-        and browser_ready
+        and (bool(o2_path) or enterprise_only)
+        and (browser_ready or enterprise_only)
         and (taobao is None or bool(taobao.get("loggedIn")))
         and (structure["ok"] if audit_only else enterprise_ready)
     )
     result = {
         "ok": required_ready if audit_only else required_ready and enterprise_ready,
         "audit_only": audit_only,
+        "enterprise_only": enterprise_only,
         "python": runtime,
         "python_packages": packages,
         "o2": {"installed": bool(o2_path), "path": o2_path},
@@ -313,7 +320,7 @@ def build_status(
         result["next"].append("Install Python 3.11 or newer, then rerun scripts/bootstrap.ps1")
     if not packages["ok"]:
         result["next"].append("Install required Python packages from requirements.txt")
-    if not o2_path:
+    if not o2_path and not enterprise_only:
         result["next"].append("Install o2 with the configured JD Python package index")
     if not audit_only and not enterprise_ready:
         result["next"].extend(
@@ -323,7 +330,7 @@ def build_status(
                 "风鸟 Key：https://www.riskbird.com/center/apiKey",
             ]
         )
-    if not browser_ready:
+    if not browser_ready and not enterprise_only:
         result["next"].extend(browser_setup_instructions())
     if taobao and not taobao.get("loggedIn"):
         result["next"].append("Log in to Taobao in the connected Chrome tab, then rerun preflight")
@@ -355,10 +362,21 @@ def main():
     parser.add_argument("--fengniao-skill-dir")
     parser.add_argument("--install-missing", action="store_true")
     parser.add_argument("--audit-only", action="store_true")
+    parser.add_argument("--enterprise-only", action="store_true")
+    parser.add_argument("--allow-paid-api", action="store_true")
     args = parser.parse_args()
+    if args.enterprise_only and (args.audit_only or args.check_taobao):
+        parser.error("--enterprise-only cannot be combined with browser audit options")
 
     runtime = python_runtime_status()
     packages = python_packages_status()
+    if not args.audit_only and not args.allow_paid_api:
+        result = {"ok": runtime["ok"] and packages["ok"], "mode": "browser",
+                  "status": "local_checks_only", "paid_api_calls": 0, "login": "not_probed",
+                  "python": runtime, "python_packages": packages,
+                  "next": ["Read browser-task-router and references/browser-enterprise.md; verify the selected authenticated adapter without paid probes."]}
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        sys.exit(0 if result["ok"] else 2)
     o2_path = find_o2()
     actions = []
 
@@ -367,17 +385,17 @@ def main():
         actions.append({"action": "install_python_dependencies", "ok": ok, "detail": detail})
         packages = python_packages_status()
 
-    if args.install_missing and runtime["ok"] and not o2_path:
+    if args.install_missing and runtime["ok"] and not o2_path and not args.enterprise_only:
         ok, detail = install_o2()
         actions.append({"action": "install_o2", "ok": ok, "detail": detail})
         o2_path = find_o2()
 
-    doctor = webcli_doctor()
+    doctor = {"ok": True, "skipped": True} if args.enterprise_only else webcli_doctor()
     if not doctor.get("ok") and args.install_missing and o2_path:
         ok, detail = install_webcli()
         actions.append({"action": "install_webcli", "ok": ok, "detail": detail})
         doctor = webcli_doctor()
-    if not webcli_browser_ready(doctor) and args.install_missing and o2_path:
+    if not webcli_browser_ready(doctor) and args.install_missing and o2_path and not args.enterprise_only:
         ok, detail = install_webcli_extension()
         actions.append({"action": "install_webcli_extension", "ok": ok, "detail": detail})
         doctor = webcli_doctor()
@@ -423,6 +441,7 @@ def main():
         fengniao=fengniao,
         actions=actions,
         review_structure=review_structure_status() if args.audit_only else None,
+        enterprise_only=args.enterprise_only,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     sys.exit(0 if result["ok"] else 2)

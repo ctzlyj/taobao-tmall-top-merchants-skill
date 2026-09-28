@@ -3,12 +3,52 @@ import json
 import re
 import time
 import tomllib
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
 
 from common import ensure_job_dir, write_json
 from configure_enterprise_keys import QCC_ENV_NAME, normalize_qcc_auth, read_user_environment
+from subject_identity import normalized_code, normalized_name
+
+
+def normalize_contact_reply(reply):
+    if not isinstance(reply, dict):
+        return reply
+    if reply.get("企业名称") and reply.get("搜索结果") == "已全量扫描该主体联系方式数据库，未发现任何记录。":
+        return {**reply, "联系方式信息": {"电话": [], "邮箱": []}, "contact_status": "not_disclosed"}
+    return reply
+
+
+def successful_step(value, field):
+    if not isinstance(value, dict) or value.get("error") or value.get("raw") or value.get("isError"):
+        return False
+    if field == "registration":
+        return bool(value.get("企业名称"))
+    return isinstance(value.get("联系方式信息"), dict)
+
+
+def fresh_step(record, field, now=None):
+    metadata = record.get("lookup", {}).get(field, {})
+    if metadata.get("status") != "success" or not successful_step(record.get(field), field):
+        return False
+    try:
+        captured = datetime.fromisoformat(metadata["captured_at"])
+        age = ((now or datetime.now(timezone.utc)) - captured).total_seconds()
+    except (KeyError, ValueError, TypeError):
+        return False
+    return 0 <= age <= (7 * 86400 if field == "registration" else 86400)
+
+
+def validate_registration(subject, registration):
+    expected_code = normalized_code(subject.get("credit_code"))
+    actual_code = normalized_code(registration.get("统一社会信用代码"))
+    if expected_code and actual_code and expected_code != actual_code:
+        raise RuntimeError("ENTERPRISE_IDENTITY_CONFLICT: credit code mismatch")
+    company = subject.get("company", "")
+    if company and normalized_name(company) != normalized_name(registration.get("企业名称")):
+        raise RuntimeError("ENTERPRISE_IDENTITY_CONFLICT: company name mismatch")
 
 
 def load_qcc_server(config_path, server_name="qcc-company"):
@@ -24,6 +64,21 @@ def load_qcc_server(config_path, server_name="qcc-company"):
     return server["url"], auth
 
 
+def decode_mcp_envelopes(text):
+    try:
+        envelopes = [json.loads(text.strip())]
+    except json.JSONDecodeError:
+        envelopes = []
+        for event in text.strip().replace("\r\n", "\n").split("\n\n"):
+            parts = [line[5:].lstrip() for line in event.splitlines() if line.startswith("data:")]
+            if parts:
+                try:
+                    envelopes.append(json.loads("\n".join(parts)))
+                except json.JSONDecodeError:
+                    continue
+    return [envelope for envelope in envelopes if isinstance(envelope, dict)]
+
+
 class QccClient:
     def __init__(self, url, auth):
         self.url = url
@@ -35,23 +90,26 @@ class QccClient:
         response = requests.post(self.url, headers=self.headers, json={"jsonrpc": "2.0", "id": self.request_id, "method": "tools/call", "params": {"name": name, "arguments": arguments}}, timeout=90)
         response.raise_for_status()
         response.encoding = "utf-8"
-        for event in response.text.strip().split("\n\n"):
-            parts = [line[6:] for line in event.splitlines() if line.startswith("data: ")]
-            if not parts:
-                continue
-            envelope = json.loads("\n".join(parts))
+        for envelope in decode_mcp_envelopes(response.text):
             if "error" in envelope:
                 error = envelope["error"]
                 if error.get("code") == 300008:
                     raise RuntimeError("QCC credit balance insufficient; recharge or switch token")
                 return {"error": error}
-            for item in envelope.get("result", {}).get("content", []):
+            result = envelope.get("result", {})
+            if not isinstance(result, dict):
+                continue
+            if result.get("isError"):
+                return {"error": {"code": "tool_error"}}
+            if isinstance(result.get("structuredContent"), dict):
+                return result["structuredContent"]
+            for item in result.get("content", []):
                 if item.get("type") == "text":
                     try:
                         return json.loads(item["text"])
                     except json.JSONDecodeError:
-                        return {"raw": item["text"]}
-        return {"error": "no SSE data"}
+                        return {"error": {"code": "invalid_tool_payload"}}
+        return {"error": {"code": "invalid_mcp_response"}}
 
 
 def brand_query(shop_name):
@@ -107,18 +165,40 @@ def enrich(job_dir, client, subjects_path, interval):
         shop = subject["shop_name"]
         company = subject["company"]
         output.setdefault(shop, [])
-        if any(item.get("company") == company for item in output[shop]):
-            print(f"[{index}/{len(subjects)}] cached {shop} / {company}", flush=True)
-            continue
-        if company in cache:
-            record = {**cache[company], **{key: value for key, value in subject.items() if key not in {"registration", "contact"}}}
-        else:
-            registration = client.call("get_company_registration_info", {"searchKey": company})
-            time.sleep(interval)
-            contact = client.call("get_contact_info", {"searchKey": company, "excludeInvalidPhone": True})
-            record = {**subject, "registration": registration, "contact": contact}
-            cache[company] = record
-        output[shop].append(record)
+        cached = cache.get(company, {})
+        record = {key: value for key, value in subject.items() if key not in {"registration", "contact", "lookup"}}
+        record.setdefault("selected", False)
+        record["lookup"] = {}
+        for field, tool in (("registration", "get_company_registration_info"), ("contact", "get_contact_info")):
+            if field == "contact" and not successful_step(record.get("registration"), "registration"):
+                record[field] = {"error": {"code": "registration_not_verified"}}
+                record["lookup"][field] = {"status": "pending"}
+                break
+            if fresh_step(cached, field):
+                record[field] = cached[field]
+                record["lookup"][field] = cached["lookup"][field]
+            else:
+                arguments = {"searchKey": subject.get("credit_code") or company}
+                if field == "contact":
+                    arguments["excludeInvalidPhone"] = True
+                try:
+                    record[field] = client.call(tool, arguments)
+                    if field == "contact":
+                        record[field] = normalize_contact_reply(record[field])
+                except requests.RequestException:
+                    record[field] = {"error": {"code": "transport_failed"}}
+                record["lookup"][field] = {
+                    "status": "success" if successful_step(record[field], field) else "retryable_error",
+                    "captured_at": datetime.now(timezone.utc).isoformat(),
+                }
+                if interval:
+                    time.sleep(interval)
+            if field == "registration" and successful_step(record[field], field):
+                validate_registration(subject, record[field])
+            output[shop] = [item for item in output[shop] if item.get("company") != company] + [record]
+            write_json(output_path, output)
+        output[shop] = [item for item in output[shop] if item.get("company") != company] + [record]
+        cache[company] = record
         write_json(output_path, output)
         print(f"[{index}/{len(subjects)}] enriched {shop} / {company}", flush=True)
         if index < len(subjects):
@@ -132,7 +212,10 @@ def main():
     parser.add_argument("--subjects")
     parser.add_argument("--config", default=str(Path.home() / ".codex/config.toml"))
     parser.add_argument("--interval", type=float, default=0.8)
+    parser.add_argument("--allow-paid-api", action="store_true")
     args = parser.parse_args()
+    if not args.allow_paid_api:
+        parser.error("PAID_API_NOT_AUTHORIZED: use enterprise_pipeline.py in browser mode, or explicitly authorize --allow-paid-api")
     job_dir = ensure_job_dir(args.job_dir)
     url, auth = load_qcc_server(args.config)
     client = QccClient(url, auth)

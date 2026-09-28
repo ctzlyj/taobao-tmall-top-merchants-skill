@@ -1,9 +1,11 @@
 import json
+import hashlib
 import os
 import random
 import re
 import time
 from dataclasses import asdict, dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import parse_qs, quote, urlparse, urlunparse
@@ -12,7 +14,9 @@ from common import clean_title, run_o2
 
 
 HIGH_SALES_THRESHOLD = 10_000
-CHECKPOINT_SCHEMA_VERSION = 1
+CHECKPOINT_SCHEMA_VERSION = 2
+REVIEW_RULE_VERSION = 2
+EVIDENCE_MAX_AGE_SECONDS = 86400
 POSITIVE_PROFILE_RESULT = "待业务复核｜类目与销量证据已核验；主图能力待人工确认；非KA待业务复核；付费/毛利仅以公开销量代理"
 LOW_PROFILE_RESULT = "否｜相关SPU或高销链接未达到引入门槛；其余画像维度待复核"
 PENDING_RESULT = "待核验"
@@ -74,7 +78,7 @@ class PageInspection:
     final_url: str
     products: tuple[ProductEvidence, ...]
     failure: str = ""
-    evidence_complete: bool = True
+    evidence_complete: bool = False
 
 
 @dataclass(frozen=True)
@@ -88,6 +92,9 @@ class ShopAuditResult:
     high_sales_links: int
     complete: bool
     sources: tuple[dict, ...] = ()
+    category: str = ""
+    rule_fingerprint: str = ""
+    captured_at: str = ""
 
 
 class BrowserAdapter(Protocol):
@@ -256,6 +263,24 @@ def stable_identity(shop_name, official_url):
     return f"{normalize_shop_name(shop_name)}|{normalize_official_shop_url(official_url)}"
 
 
+def rule_fingerprint(category):
+    terms = sorted(set(re.split(r"[/、,，|]+", re.sub(r"\s+", "", clean_title(category)).lower())))
+    payload = [REVIEW_RULE_VERSION, terms, HIGH_SALES_THRESHOLD, 20, 3, 15, 1]
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def decision_identity(shop_name, official_url, category):
+    return f"{stable_identity(shop_name, official_url)}|{rule_fingerprint(category)}"
+
+
+def fresh_result(data):
+    try:
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(data["captured_at"])).total_seconds()
+    except (KeyError, ValueError, TypeError):
+        return False
+    return 0 <= age <= EVIDENCE_MAX_AGE_SECONDS
+
+
 def make_safe_assign_script(url):
     return f"location.assign({json.dumps(str(url), ensure_ascii=False)})"
 
@@ -326,7 +351,7 @@ def inspection_from_payload(payload, source_type, requested_url, category=""):
         final_url=final_url,
         products=tuple(products),
         failure=failure,
-        evidence_complete=bool(category),
+        evidence_complete=False,
     )
 
 
@@ -365,7 +390,15 @@ def audit_shop(task, browser):
     final_url = home.final_url
     official_shop_url = home.final_url
 
-    if not evidence:
+    def sufficient():
+        summary = summarize_evidence(evidence)
+        relevant = [item for item in summary.products if item.relevant]
+        high = summary.relevant_spu >= 20 and summary.high_sales_links >= 3
+        exhaustive = any(item.evidence_complete for item in inspections)
+        sales_known = all(item.sales_lower_bound is not None for item in relevant)
+        return bool(relevant) and (high or (exhaustive and sales_known))
+
+    if not sufficient():
         browser.open_hot_sales(final_url)
         hot_sales = browser.inspect_page("shop_hot_sales")
         inspections.append(hot_sales)
@@ -375,7 +408,7 @@ def audit_shop(task, browser):
         final_url = hot_sales.final_url or final_url
         official_shop_url = official_shop_url or hot_sales.final_url
 
-    if not evidence:
+    if not sufficient():
         browser.open_public_shop_list(task, final_url)
         public_list = browser.inspect_page("public_shop_list")
         inspections.append(public_list)
@@ -385,11 +418,7 @@ def audit_shop(task, browser):
         final_url = public_list.final_url or final_url
 
     summary = summarize_evidence(evidence)
-    evidence_complete = (
-        bool(summary.products)
-        and summary.relevant_spu > 0
-        and all(item.evidence_complete for item in inspections)
-    )
+    evidence_complete = sufficient()
     result = classify_review(summary.relevant_spu, summary.high_sales_links, complete=evidence_complete)
     return ShopAuditResult(
         shop_name=task.shop_name,
@@ -401,6 +430,9 @@ def audit_shop(task, browser):
         high_sales_links=result.high_sales_links,
         complete=result.complete,
         sources=tuple(_source_record(item) for item in inspections),
+        category=task.category,
+        rule_fingerprint=rule_fingerprint(task.category),
+        captured_at=datetime.now(timezone.utc).isoformat(),
     )
 
 
@@ -430,6 +462,9 @@ def _result_from_dict(data):
         high_sales_links=int(data.get("high_sales_links") or 0),
         complete=bool(data.get("complete")),
         sources=tuple(data.get("sources") or ()),
+        category=str(data.get("category") or ""),
+        rule_fingerprint=str(data.get("rule_fingerprint") or ""),
+        captured_at=str(data.get("captured_at") or ""),
     )
 
 
@@ -460,6 +495,13 @@ def load_checkpoint(path):
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise ValueError(f"invalid review checkpoint: {error}") from error
+    if payload.get("schema_version") == 1:
+        backup = path.with_name(path.name + ".v1.bak")
+        if not backup.exists():
+            with backup.open("xb") as handle:
+                handle.write(path.read_bytes())
+        payload = {"schema_version": CHECKPOINT_SCHEMA_VERSION, "status": "migrated",
+                   "completed": {}, "aliases": {}, "legacy_checkpoint": str(backup)}
     if payload.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
         raise ValueError("unsupported review checkpoint schema")
     payload.setdefault("completed", {})
@@ -473,11 +515,14 @@ def _find_reusable(task, checkpoint):
     candidate_keys = []
     if task.shop_url:
         if is_direct_official_shop_url(task.shop_url):
-            candidate_keys.append(stable_identity(task.shop_name, task.shop_url))
+            candidate_keys.append(decision_identity(task.shop_name, task.shop_url, task.category))
         alias = aliases.get(normalize_url(task.shop_url))
         if alias:
             candidate_keys.append(alias)
-    matches = [completed[key] for key in dict.fromkeys(candidate_keys) if key in completed]
+    matches = [completed[key] for key in dict.fromkeys(candidate_keys) if key in completed
+               and normalize_shop_name(completed[key].get("shop_name")) == normalize_shop_name(task.shop_name)
+               and completed[key].get("rule_fingerprint") == rule_fingerprint(task.category)
+               and fresh_result(completed[key])]
     if len({item.get("official_shop_url") for item in matches}) > 1:
         raise PageAuditFailure("shop_identity_conflict")
     return _result_from_dict(matches[0]) if matches else None
@@ -515,7 +560,7 @@ def audit_queue(tasks, browser, checkpoint_path, sleeper=time.sleep, rng=random.
             checkpoint["pending"] = [asdict(item) for item in task_list[index:]]
             write_checkpoint_atomic(checkpoint_path, checkpoint)
             raise AuditPaused(str(error), checkpoint_path) from error
-        identity = stable_identity(task.shop_name, result.official_shop_url)
+        identity = decision_identity(task.shop_name, result.official_shop_url, task.category)
         checkpoint["completed"][identity] = _result_to_dict(result)
         if task.shop_url:
             checkpoint["aliases"][normalize_url(task.shop_url)] = identity

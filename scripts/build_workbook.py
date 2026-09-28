@@ -10,6 +10,8 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from common import load_job, parse_sales_lower_bound
+from subject_identity import valid_qualification
+from workbook_formulas import cache_generated_formulas
 
 
 NAVY = "17365D"
@@ -38,6 +40,19 @@ def contact_row_height(phones, emails, minimum):
     phone_lines = len(phones.split("；")) if phones else 0
     email_lines = len(emails.split("；")) if emails else 0
     return max(minimum, 16 * max(phone_lines, email_lines) + 8)
+
+
+def render_evidence(*records):
+    values = []
+    for record in records:
+        for field in ("evidence", "source_url"):
+            value = record.get(field)
+            if isinstance(value, str) and value.strip():
+                values.append(value.strip())
+        for source in record.get("sources") or []:
+            if isinstance(source, dict) and source.get("url"):
+                values.append(str(source["url"]).strip())
+    return "\n".join(dict.fromkeys(values))
 
 
 def sales_summary(audit):
@@ -109,9 +124,11 @@ def qualification_subject(qualification, matched_candidate=None):
 def resolve_confirmed_subject(enrichment, shop, qualification=None):
     qualification = qualification or {}
     candidates = enrichment.get(shop, [])
-    if qualification.get("status") == "verified" and qualification.get("company_name") and qualification.get("credit_code"):
+    if valid_qualification(qualification):
         matched = next((candidate for candidate in candidates if qualification_matches(candidate, qualification)), None)
         return qualification_subject(qualification, matched)
+    if qualification:
+        return {}
     return selected_company(enrichment, shop)
 
 
@@ -129,7 +146,7 @@ def candidate_outreach(enrichment, shop, qualification=None):
         if not company:
             continue
         role = candidate.get("role") or candidate.get("subject_role") or "候选企业"
-        if qualification and qualification.get("status") == "verified":
+        if valid_qualification(qualification):
             relationship = "与平台营业执照一致" if qualification_matches(candidate, qualification) else "与平台营业执照不一致，仅供建联线索"
         else:
             relationship = "有闭环证据" if has_confirmed_identity_evidence(candidate) else "待核验店铺关系，不是已确认主体"
@@ -144,7 +161,7 @@ def candidate_outreach(enrichment, shop, qualification=None):
             address_lines.append(f"{company}：{address}")
     if not company_lines:
         note = "未取得公开企业候选联系方式；优先使用店铺客服/旺旺建联并索取营业执照主体。"
-    elif qualification and qualification.get("status") == "verified":
+    elif valid_qualification(qualification):
         note = f'平台营业执照主体为“{qualification.get("company_name", "")}”；其他公司仅作建联线索，不得写入已确认主体。'
     elif len(company_lines) == 1:
         note = "仅有1个企业候选，但不等于当前店铺主体；联系时先核验店铺名称、营业执照和授权关系。"
@@ -214,7 +231,7 @@ def prepare_rows(job_dir):
     formal, rejected = [], []
     for record in audit.values():
         store = storefronts.get(record["shop_name"], {})
-        qualification = qualifications.get(record["shop_name"], {}) or store.get("platform_qualification", {})
+        qualification = qualifications.get(record["shop_name"], {})
         if not record.get("passes_minimum"):
             reasons = []
             if record.get("target_spu", 0) < job["min_spu"]:
@@ -231,8 +248,8 @@ def prepare_rows(job_dir):
         outreach = candidate_outreach(enrichment, record["shop_name"], qualification)
         payment, sales_count = sales_summary(record)
         company = registration.get("企业名称") or company_record.get("company", "")
-        mismatched_candidates = [candidate for candidate in enrichment.get(record["shop_name"], []) if qualification.get("status") == "verified" and not qualification_matches(candidate, qualification)]
-        subject_consistency = "平台营业执照已确认" if qualification.get("status") == "verified" else ("强证据已确认" if company else "未确认")
+        mismatched_candidates = [candidate for candidate in enrichment.get(record["shop_name"], []) if valid_qualification(qualification) and not qualification_matches(candidate, qualification)]
+        subject_consistency = "平台营业执照已确认" if valid_qualification(qualification) else ("强证据已确认" if company else "未确认")
         pending = company_record.get("pending", "") if company_record else ""
         if mismatched_candidates:
             pending = "企业搜索候选与平台营业执照不一致，已禁止写入正式主体；联系方式如需使用，必须先核验授权或关联关系。"
@@ -260,7 +277,7 @@ def prepare_rows(job_dir):
             "status": registration.get("登记状态", ""),
             "subject_role": (company_record.get("role") or company_record.get("subject_role", "")) if company_record else "",
             "subject_confidence": (company_record.get("confidence") or company_record.get("subject_confidence") or "未确认") if company_record else "未确认",
-            "evidence": company_record.get("evidence", "") if company_record else "",
+            "evidence": render_evidence(company_record, *enrichment.get(record["shop_name"], [])),
             "pending": pending,
         })
     formal.sort(key=lambda row: (0 if row["match_grade"] == "高匹配" else 1, -row["payment_lower_bound"], row["shop_name"]))
@@ -313,14 +330,14 @@ def style_table(sheet, header_row, widths, row_height=48):
 def add_overview(workbook, job, formal, rejected, missing, audit_failures):
     sheet = workbook.active
     sheet.title = "概览"
-    style_title(sheet, f'{job["category"]}｜淘宝 + 天猫TOP商家招商概览', f'正式门槛：目标SPU≥{job["min_spu"]}、店内目标占比≥{job["min_share"]:.0%}；≥{job["high_match_share"]:.0%}标记高匹配。淘宝/C店不是淘汰条件。', 8)
+    style_title(sheet, f'{job["category"]}｜淘宝 + 天猫TOP商家招商概览', f'搜索样本初筛：目标SPU≥{job["min_spu"]}、样本目标占比≥{job["min_share"]:.0%}；不代表全店主营占比或全市场Top排名。淘宝/C店不是淘汰条件。', 8)
     sheet.append(["指标", "总计", "天猫", "淘宝", "高匹配", "达标", "主体已补", "存在未确认字段"])
     sheet.append(["正式招商记录", len(formal), sum(row["platform"] == "天猫" for row in formal), sum(row["platform"] == "淘宝" for row in formal), sum(row["match_grade"] == "高匹配" for row in formal), sum(row["match_grade"] == "达标" for row in formal), sum(bool(row["company"]) for row in formal), len(missing)])
     sheet.append(["淘汰记录", len(rejected), "", "", "", "", "", ""])
     sheet.append(["未完成审计", len(audit_failures), sum(row["platform"] == "天猫" for row in audit_failures), sum(row["platform"] == "淘宝" for row in audit_failures), "", "", "", "详见未确认字段"])
     sheet.append([])
     sheet.append(["口径", "说明", "", "", "", "", "", ""])
-    notes = [("类目范围", job.get("scope_note", "")), ("精准命中", "按精确店铺名反聚合商品，并以唯一商品ID计SPU。"), ("销量", "付款人数展示下限用于相对排序，不等同近30天月销。"), ("主体", "公司可能是品牌/生产/运营候选，最终以店铺资质页为准；多候选不自动取第一名。")]
+    notes = [("类目范围", job.get("scope_note", "")), ("精准命中", "按精确店铺名反聚合搜索样本，以唯一商品ID计SPU；未证明全店分页完整，不代表全店主营占比。"), ("销量", "付款人数展示下限用于相对排序，不等同近30天月销。"), ("主体", "公司可能是品牌/生产/运营候选，最终以店铺资质页为准；多候选不自动取第一名。")]
     for label, text in notes:
         sheet.append([label, text, "", "", "", "", "", ""])
         sheet.merge_cells(start_row=sheet.max_row, start_column=2, end_row=sheet.max_row, end_column=8)
@@ -330,7 +347,7 @@ def add_overview(workbook, job, formal, rejected, missing, audit_failures):
 def add_formal(workbook, job, rows):
     sheet = workbook.create_sheet("正式招商商家")
     headers = ["序号", "类目", "平台/店铺类型", "店铺名", "目标SPU", "精确店铺SPU", "相关占比", "匹配等级", "付款人数展示下限", "有销量展示商品数", "店铺链接", "shopId", "sellerId", "建联候选公司（非店铺主体，待核验）", "候选电话（待核验）", "候选邮箱（待核验）", "候选地址（待核验）", "建联提示", "平台营业执照公司名称", "平台营业执照信用代码", "主体一致性", "主体角色", "主体置信度", "公司名称", "法人", "公司电话", "邮箱", "注册地址", "成立日期", "统一社会信用代码", "登记状态", "数据来源/证据", "待确认项"]
-    style_title(sheet, f'{job["category"]}｜正式招商商家｜淘宝 + 天猫', f'保留规则：目标SPU≥{job["min_spu"]}、相关占比≥{job["min_share"]:.0%}。候选电话/邮箱/地址可用于初步建联，但联系时必须先核验与店铺关系；已确认主体字段仍以资质证据为准。', len(headers))
+    style_title(sheet, f'{job["category"]}｜正式招商商家｜淘宝 + 天猫', f'搜索样本初筛：目标SPU≥{job["min_spu"]}、样本占比≥{job["min_share"]:.0%}；精确店铺SPU仅指店名精确匹配的已见样本，不代表全店。候选联系方式不证明店铺主体。', len(headers))
     sheet.append(headers)
     for index, row in enumerate(rows, 1):
         excel_row = sheet.max_row + 1
@@ -351,14 +368,14 @@ def add_formal(workbook, job, rows):
 def add_subjects(workbook, job_dir, formal):
     sheet = workbook.create_sheet("主体核验")
     headers = ["店铺名", "平台", "候选类型", "公司/主体", "状态", "成立日期", "统一社会信用代码", "法人", "电话", "邮箱", "关联证据", "核验结论"]
-    style_title(sheet, "主体核验｜企业候选与工商补全", "企查查/爱企查/天眼查/风鸟等多源检索返回多候选时不自动选择第一名；正式采用项仍需店铺资质页确认。", len(headers))
+    style_title(sheet, "主体核验｜企业候选与工商补全", "企查查与风鸟双源核验企业，保留所有候选；企业一致不等于店铺关系已确认。", len(headers))
     sheet.append(headers)
     platform = {row["shop_name"]: row["platform"] for row in formal}
     candidates = load_optional(job_dir / "company_candidates.json", {})
     enrichment = load_optional(job_dir / "company_enrichment.json", {})
     qualifications = load_optional(job_dir / "platform_qualifications.json", {})
     for shop, qualification in qualifications.items():
-        if qualification.get("status") != "verified":
+        if not valid_qualification(qualification):
             continue
         sheet.append([
             shop,
@@ -375,7 +392,12 @@ def add_subjects(workbook, job_dir, formal):
             "已确认当前持证经营主体",
         ])
     for shop, record in candidates.items():
-        for company in record.get("result", {}).get("企业信息", [])[:8]:
+        result = record.get("result", {})
+        companies = result.get("企业信息", [])
+        if record.get("source") == "fengniao" and isinstance(result.get("data"), list):
+            companies = [{"企业名称": item.get("entName") or item.get("ENTNAME"),
+                          "状态": item.get("entStatus") or item.get("ENTSTATUS", "")} for item in result["data"]]
+        for company in companies:
             legal = company.get("法定代表人名称", [])
             sheet.append([shop, platform.get(shop, ""), "实体识别候选", company.get("企业名称", ""), company.get("状态", ""), company.get("成立日期", ""), company.get("统一社会信用代码", ""), "；".join(legal) if isinstance(legal, list) else legal, "", "", f'检索词：{record.get("query", "")}', "多候选，仅供人工核对"])
     for shop, records in enrichment.items():
@@ -383,13 +405,13 @@ def add_subjects(workbook, job_dir, formal):
             registration = record.get("registration", {}) if isinstance(record.get("registration"), dict) else {}
             phone, email = extract_contacts(record.get("contact", {}))
             qualification = qualifications.get(shop, {})
-            if qualification.get("status") == "verified":
+            if valid_qualification(qualification):
                 conclusion = "与平台营业执照一致" if qualification_matches(record, qualification) else "与平台营业执照不一致，仅作建联候选"
             elif has_confirmed_identity_evidence(record):
                 conclusion = "强证据已闭环"
             else:
                 conclusion = "候选主体，未确认店铺关系"
-            sheet.append([shop, platform.get(shop, ""), "已查工商候选", registration.get("企业名称") or record.get("company", ""), registration.get("登记状态", ""), registration.get("成立日期", ""), registration.get("统一社会信用代码", ""), registration.get("法定代表人", ""), phone, email, record.get("evidence", ""), conclusion])
+            sheet.append([shop, platform.get(shop, ""), "已查工商候选", registration.get("企业名称") or record.get("company", ""), registration.get("登记状态", ""), registration.get("成立日期", ""), registration.get("统一社会信用代码", ""), registration.get("法定代表人", ""), phone, email, render_evidence(record), conclusion])
     style_table(sheet, 3, [26, 10, 20, 32, 18, 13, 24, 12, 26, 28, 42, 34], 58)
     for row_number in range(4, sheet.max_row + 1):
         sheet.row_dimensions[row_number].height = contact_row_height(
@@ -426,7 +448,7 @@ def add_missing(workbook, formal, missing, audit_failures):
 def add_rejected(workbook, job, rows):
     sheet = workbook.create_sheet("淘汰商家")
     headers = ["类目", "平台", "店铺名", "目标SPU", "精确店铺SPU", "相关占比", "带电SPU", "配件SPU", "无关SPU", "淘汰原因", "店铺链接", "采集时间"]
-    style_title(sheet, "淘汰商家｜低于门槛", "淘汰仅依据本轮商品结构；淘宝/C店不会因店铺类型被淘汰。", len(headers))
+    style_title(sheet, "淘汰商家｜低于门槛", "仅表示本轮搜索样本未达初筛门槛，不代表全店不达标；淘宝/C店不会因店铺类型被淘汰。", len(headers))
     sheet.append(headers)
     for row in rows:
         sheet.append([row.get("category") or job["category"], row["platform"], row["shop_name"], row["target_spu"], row["exact_shop_spu_seen"], row["target_share"], row["electric_spu"], row["accessory_spu"], row["unrelated_spu"], row["reason"], row["store_url"], row.get("captured_at", "")])
@@ -436,7 +458,7 @@ def add_rejected(workbook, job, rows):
 
 def add_method(workbook, job):
     sheet = workbook.create_sheet("口径与复用")
-    style_title(sheet, "口径与复用方法｜换其他二级类目也可执行", "先按商品类目发现店铺，再反查店铺商品结构，最后锚定工商主体。", 6)
+    style_title(sheet, "口径与复用方法｜换其他二级类目也可执行", "先采集店名精确匹配的搜索样本，再做样本初筛，最后锚定工商主体；全店覆盖仍待核验。", 6)
     sheet.append(["步骤", "目的", "输入", "处理规则", "输出", "质量控制"])
     rows = [(1, "类目发现", "类目核心词+同义词", "淘宝全平台搜索，淘宝与天猫都保留", "候选店铺池", "低频访问"), (2, "店铺反聚合", "候选店铺名", "精确店铺名+唯一商品ID", "精确店铺SPU", "排除其他店铺"), (3, "目标识别", "商品标题", "目标词与排除词", "目标SPU", "抽查误判"), (4, "结构门槛", "目标SPU/店铺SPU", f'SPU≥{job["min_spu"]}且占比≥{job["min_share"]:.0%}', "正式/淘汰", "两平台同规则"), (5, "主体锚定", "资质/公司全称或品牌", "精确主体先企查查；模糊主体先风鸟", "公司和联系方式", "另一数据源复核补缺"), (6, "人工终审", "店铺资质页", "核对当前持证主体", "最终招商主体", "验证码由用户完成")]
     for row in rows:
@@ -471,6 +493,7 @@ def build(job_dir, output=None):
     output_path = Path(output) if output else job_dir / "outputs" / f'{job["category"]}_淘宝天猫TOP商家招商表.xlsx'
     output_path.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(output_path)
+    cache_generated_formulas(output_path, job)
     return output_path
 
 
