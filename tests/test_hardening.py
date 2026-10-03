@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -21,7 +22,7 @@ from enrich_companies import enrich
 from review_workbook import ReviewRow, group_pending_rows
 from verify_job import verify
 from common import load_job
-from workbook_formulas import cache_generated_formulas
+from workbook_formulas import cache_generated_formulas, replace_with_retry
 from audit_shops import audit_rows
 
 
@@ -249,6 +250,40 @@ class WorkbookHardeningTests(unittest.TestCase):
                 workbook.save(path)
                 with self.assertRaises(AssertionError):
                     verify(job_dir, path)
+
+    def test_replace_with_retry_survives_transient_windows_file_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.xlsx"
+            destination = Path(directory) / "destination.xlsx"
+            source.write_bytes(b"payload")
+            failures = []
+            original_replace = os.replace
+
+            def flaky_replace(src, dst):
+                if not failures:
+                    failures.append(True)
+                    raise PermissionError(5, "transient lock")
+                original_replace(src, dst)
+
+            replace_with_retry(source, destination, attempts=3, delay=0,
+                               replace=flaky_replace, sleep=lambda _delay: None)
+            self.assertEqual(destination.read_bytes(), b"payload")
+            self.assertFalse(source.exists())
+
+    def test_replace_with_retry_reraises_persistent_windows_file_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.xlsx"
+            destination = Path(directory) / "destination.xlsx"
+            source.write_bytes(b"payload")
+
+            def always_locked(_src, _dst):
+                raise PermissionError(5, "persistent lock")
+
+            with self.assertRaises(PermissionError):
+                replace_with_retry(source, destination, attempts=2, delay=0,
+                                   replace=always_locked, sleep=lambda _delay: None)
+            self.assertTrue(source.exists())
+            self.assertFalse(destination.exists())
 
     def test_nested_qualification_cannot_confirm_subject(self):
         with tempfile.TemporaryDirectory() as directory:

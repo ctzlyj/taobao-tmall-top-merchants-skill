@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 from pathlib import Path
 from xml.etree import ElementTree
 from zipfile import ZipFile
@@ -8,6 +9,24 @@ from openpyxl import load_workbook
 
 
 MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
+
+def replace_with_retry(source, destination, attempts=5, delay=0.05,
+                       replace=os.replace, sleep=time.sleep):
+    """os.replace with bounded retries for transient Windows file locks.
+
+    Defender/indexing services can briefly lock a freshly written xlsx and make
+    os.replace fail with PermissionError (WinError 5) even though no handle is
+    open in this process. Persistent failures still raise after the last attempt.
+    """
+    for attempt in range(attempts):
+        try:
+            replace(source, destination)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            sleep(delay * (attempt + 1))
 
 
 def expected_formulas(row, job):
@@ -63,7 +82,7 @@ def cache_generated_formulas(path, job):
                         cached.text = str(value)
                     data = ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
                 output.writestr(entry, data)
-        os.replace(temporary, path)
+        replace_with_retry(temporary, path)
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
