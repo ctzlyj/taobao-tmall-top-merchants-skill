@@ -78,10 +78,50 @@ class LocalBeltDiscoveryTests(unittest.TestCase):
                          "https://www.riskbird.com/ent/a.html?entid=one")
         self.assertIsNone(self.module.pick_riskbird_link({"cards": []}, "示例市星辰日用品有限公司"))
 
+    def test_riskbird_full_name_resolves_card_abbreviation_for_adapter_identity(self):
+        search_row = {"cards": [{
+            "links": [
+                {"name": "示例市闽江商贸有限公司", "url": "https://www.riskbird.com/ent/a.html?entid=one"},
+            ]
+        }]}
+        self.assertEqual(self.module.riskbird_full_name(search_row, "示例市闽江商贸"),
+                         "示例市闽江商贸有限公司")
+        self.assertEqual(self.module.riskbird_full_name({"cards": []}, "示例市闽江商贸"),
+                         "示例市闽江商贸")
+
+    def test_parse_trademark_rows_normalizes_tabs_and_filters_registered_marks(self):
+        raw = ("商标信息\n19\n序号\t\n\t商标名称\t\n\t国际分类\t\n\t商标状态\t\n\t申请注册号\n"
+               "1\t\n\t梅森生活家\t第21类 厨房洁具\t已注册\t58708495\t2021-08-24\n"
+               "2\t\n\t示例图形\t第35类 广告销售\t商标无效\t11111111\t2021-08-02\n"
+               "3\t\n\t示例图案\t第21类 厨房洁具\t初审公告\t22222222\t2021-08-02\n")
+        rows = self.module.parse_trademark_rows(raw)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[0]["name"], "梅森生活家")
+        self.assertEqual(rows[0]["class"], "第21类 厨房洁具")
+        self.assertEqual(rows[0]["status"], "已注册")
+        self.assertEqual(rows[0]["reg_no"], "58708495")
+        self.assertEqual(rows[2]["status"], "初审公告")
+        registered = self.module.registered_trademarks(rows)
+        self.assertEqual(registered, [rows[0]])
+        relevant = self.module.relevant_trademarks(registered)
+        self.assertEqual(relevant, [rows[0]])
+
+    def test_relevant_trademark_classes_cover_recruitment_categories(self):
+        row = {"name": "示例商标", "class": "第10类 医疗器械", "status": "已注册", "reg_no": "1", "applied": "2021-01-01"}
+        self.assertEqual(self.module.relevant_trademarks([row]), [row])
+        unrelated = dict(row, **{"class": "第41类 教育娱乐"})
+        self.assertEqual(self.module.relevant_trademarks([unrelated]), [])
+
     def test_reference_documents_riskbird_url_and_conflict_rules(self):
         reference = (ROOT / "references/local-belt-visit.md").read_text(encoding="utf-8")
         for marker in ("entid", "INVALID_REQUEST", "IDENTITY_CONFLICT", "风控", "未披露/未确认",
                        "零付费", "拜访路线"):
+            self.assertIn(marker, reference)
+
+    def test_reference_documents_trademark_tab_and_conflict_diagnostics(self):
+        reference = (ROOT / "references/local-belt-visit.md").read_text(encoding="utf-8")
+        for marker in ("知识产权", "商标", "曾用名", "全称", "table.xs-descriptions-box",
+                       "web_searchBrand", "verify.qcc.com/limits"):
             self.assertIn(marker, reference)
 
 

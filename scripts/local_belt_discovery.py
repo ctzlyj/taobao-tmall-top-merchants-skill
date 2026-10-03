@@ -74,6 +74,36 @@ RISKBIRD_SEARCH_EXTRACT = """
 })()
 """
 
+RISKBIRD_IP_CLICK_AND_READ = """
+(() => {
+  const text = document.body ? document.body.innerText : "";
+  const countOf = (label) => {
+    const match = text.match(new RegExp(label + '\\\\s*\\\\n?\\\\s*(\\\\d+)'));
+    return match ? Number(match[1]) : null;
+  };
+  const tabs = Array.from(document.querySelectorAll('.info-tabs-item'));
+  const target = tabs.find(element => element.innerText.trim().startsWith('知识产权'));
+  let clicked = false;
+  if (target) {
+    target.scrollIntoView({block: 'center'});
+    target.click();
+    clicked = true;
+  }
+  const tmStart = text.lastIndexOf('商标信息');
+  return {url: location.href, ipClicked: clicked,
+          trademarkCount: countOf('商标信息'), patentCount: countOf('专利信息'),
+          copyrightCount: countOf('作品著作权'),
+          rawTmText: tmStart >= 0 ? text.slice(tmStart, tmStart + 2600) : ""};
+})()
+"""
+
+TRADEMARK_ROW = re.compile(
+    r"(\d+)\t([^\t]+)\t(第\d+类[^\t]*)\t([^\t]*)\t(\d+)\t(\d{4}-\d{2}-\d{2})")
+
+RELEVANT_TRADEMARK_CLASSES = (
+    "第21类", "第20类", "第35类", "第10类", "第28类", "第08类", "第03类", "第11类",
+)
+
 
 def build_queries(region, keywords, suffixes=()):
     if not isinstance(region, str) or not region.strip():
@@ -166,6 +196,51 @@ def pick_riskbird_link(search_row, name):
     return None
 
 
+def riskbird_full_name(search_row, name):
+    """Resolve card abbreviations to the detail-page full company name.
+
+    The adapter compares the registry 企业名称 verbatim; a QCC card name like
+    "徐州闽江商贸" fails IDENTITY_CONFLICT against the real page name
+    "徐州闽江商贸有限公司" even when credit code and legal name match.
+    """
+    for card in search_row.get("cards", []):
+        for link in card.get("links", []):
+            link_name = link.get("name") or ""
+            if name in link_name or link_name in name:
+                return link_name
+    return name
+
+
+def parse_trademark_rows(raw_text):
+    """Parse first-page trademark rows from the Riskbird IP tab text dump.
+
+    The page renders each row as "序号\\t\\n\\t商标名称\\t国际分类\\t状态\\t注册号\\t日期";
+    normalize the embedded tab-newline-tab sequence before matching.
+    """
+    normalized = (raw_text or "").replace("\t\n\t", "\t")
+    rows = []
+    for match in TRADEMARK_ROW.finditer(normalized):
+        item = {
+            "name": match.group(2).strip(),
+            "class": match.group(3).strip(),
+            "status": match.group(4).strip(),
+            "reg_no": match.group(5),
+            "applied": match.group(6),
+        }
+        if item["name"] and not item["name"].startswith("商标"):
+            rows.append(item)
+    return rows
+
+
+def registered_trademarks(rows):
+    return [row for row in rows if row.get("status") == "已注册"]
+
+
+def relevant_trademarks(rows):
+    return [row for row in rows
+            if (row.get("class") or "").startswith(RELEVANT_TRADEMARK_CLASSES)]
+
+
 def run_webcli(arguments, timeout=130):
     environment = os.environ.copy()
     environment["WEBCLI_WINDOW"] = "background"
@@ -255,7 +330,8 @@ def verify_riskbird_details(companies, session, search_rows, output_path, interv
             continue
         if index > 1:
             time.sleep(interval)
-        arguments = ["riskbird", "company", url, "--company", name]
+        company_name = riskbird_full_name(search_by_name.get(name, {}), name)
+        arguments = ["riskbird", "company", url, "--company", company_name]
         if company.get("credit"):
             arguments.extend(["--credit-code", company["credit"]])
         if company.get("legal"):
@@ -280,9 +356,53 @@ def verify_riskbird_details(companies, session, search_rows, output_path, interv
     return details
 
 
+def read_riskbird_ip(companies, session, search_rows, output_path, interval=20, limit=None):
+    """Read the Riskbird 知识产权 tab for brand/trademark prioritization.
+
+    Uses the same entid-only detail URLs as verify. Only first-page rows are
+    captured because the trademark table paginates; the total counts are read
+    from the tab headers.
+    """
+    search_by_name = {row.get("name"): row for row in search_rows}
+    saved = (json.loads(Path(output_path).read_text(encoding="utf-8"))
+             if Path(output_path).exists() else [])
+    done = {row.get("name") for row in saved}
+    for company in companies[:limit] if limit else companies:
+        name = company["name"]
+        if name in done:
+            continue
+        url = pick_riskbird_link(search_by_name.get(name, {}), name)
+        if not url:
+            print(f"{name}: NOT FOUND - skipping IP read", flush=True)
+            continue
+        if saved:
+            time.sleep(max(0, interval))
+        run_webcli(["browser", session, "open", url])
+        time.sleep(4)
+        browser_eval(session, RISKBIRD_IP_CLICK_AND_READ)
+        time.sleep(3)
+        payload = browser_eval(session, RISKBIRD_IP_CLICK_AND_READ)
+        rows = parse_trademark_rows(payload.get("rawTmText") or "")
+        saved.append({
+            "name": name,
+            "header": {"url": payload.get("url"), "ipClicked": payload.get("ipClicked")},
+            "ip": {
+                "trademarkCount": payload.get("trademarkCount"),
+                "patentCount": payload.get("patentCount"),
+                "copyrightCount": payload.get("copyrightCount"),
+                "trademarks": rows[:12],
+                "registeredRelevant": relevant_trademarks(registered_trademarks(rows)),
+            },
+        })
+        write_json(output_path, saved)
+        print(f"{name}: tm={payload.get('trademarkCount')} pt={payload.get('patentCount')} "
+              f"ipClicked={payload.get('ipClicked')}", flush=True)
+    return saved
+
+
 def main():
     parser = argparse.ArgumentParser(description="区域产业带走访发现：企查查检索 + 风鸟核验，零付费API")
-    parser.add_argument("phase", choices=["collect", "parse", "verify"])
+    parser.add_argument("phase", choices=["collect", "parse", "verify", "trademarks"])
     parser.add_argument("--region", help="区域名，例如：邳州")
     parser.add_argument("--keywords", help="逗号分隔类目词，例如：沐浴,泡脚,木梳")
     parser.add_argument("--suffixes", default="", help="可选逗号分隔后缀，例如：制造,电子商务")
@@ -292,6 +412,7 @@ def main():
     parser.add_argument("--companies", default="companies.json", help="parse 输出/verify 输入文件名")
     parser.add_argument("--search-file", default="riskbird_search.json")
     parser.add_argument("--details-file", default="riskbird_details.json")
+    parser.add_argument("--ip-file", default="riskbird_ip.json")
     parser.add_argument("--limit", type=int, help="verify 阶段最多处理的企业数")
     parser.add_argument("--interval", type=float, default=20, help="风鸟导航最小间隔秒数")
     args = parser.parse_args()
@@ -323,6 +444,13 @@ def main():
         verify_riskbird_details(companies, args.session, search_rows,
                                 out_dir / args.details_file,
                                 interval=max(0, args.interval), limit=args.limit)
+    elif args.phase == "trademarks":
+        if not args.session:
+            raise SystemExit("trademarks 需要 --session")
+        companies = json.loads((out_dir / args.companies).read_text(encoding="utf-8"))
+        search_rows = json.loads((out_dir / args.search_file).read_text(encoding="utf-8"))
+        read_riskbird_ip(companies, args.session, search_rows, out_dir / args.ip_file,
+                         interval=max(0, args.interval), limit=args.limit)
 
 
 if __name__ == "__main__":
