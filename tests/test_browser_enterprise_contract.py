@@ -1,8 +1,11 @@
 import unittest
 from pathlib import Path
 
+import sys
+
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
 
 
 class BrowserEnterpriseContractTests(unittest.TestCase):
@@ -31,6 +34,24 @@ class BrowserEnterpriseContractTests(unittest.TestCase):
         reference = (ROOT / "references/browser-enterprise.md").read_text(encoding="utf-8")
         for scenario in ("每个号码独立核验", "来源明确标注（未拨通）", "来源冲突，暂停认定", "不把一个姓名批量分配给全部电话", "不按姓名猜测性别"):
             self.assertIn(scenario, reference)
+
+    def test_normalize_target_strips_riskbird_tracking_parameters(self):
+        from browser_enterprise import normalize_target
+        target = normalize_target({
+            "shop_name": "示例市星辰日用品有限公司",
+            "company": "示例市星辰日用品有限公司",
+            "credit_code": "91320382MA000000X1",
+            "source_url": "https://www.riskbird.com/ent/%E7%A4%BA%E4%BE%8B.html?entid=abc123&fuzzyId=456&position=1",
+        })
+        self.assertEqual(target["source_url"],
+                         "https://www.riskbird.com/ent/%E7%A4%BA%E4%BE%8B.html?entid=abc123")
+        with self.assertRaises(ValueError):
+            normalize_target({
+                "shop_name": "示例市星辰日用品有限公司",
+                "company": "示例市星辰日用品有限公司",
+                "credit_code": "91320382MA000000X1",
+                "source_url": "https://example.com/ent/x.html?entid=abc123",
+            })
 
 
 if __name__ == "__main__":

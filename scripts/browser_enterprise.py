@@ -8,7 +8,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from browser_contacts import PHONE, compact, contact_rows, public_url, recent, text
+from browser_contacts import PHONE, compact, contact_rows, public_url, recent, riskbird_detail_url, text
 from common import write_json
 
 STOP_CODES = {
@@ -37,7 +37,8 @@ def normalize_target(row):
         raise ValueError("INVALID_BROWSER_TARGET")
     target = {key: text(row.get(key, "")) for key in
               ("shop_name", "company", "credit_code", "registration_number", "legal_name", "address")}
-    target["source_url"] = public_url(row["source_url"], riskbird=True) if row.get("source_url") else ""
+    target["source_url"] = (public_url(riskbird_detail_url(row["source_url"]), riskbird=True)
+                            if row.get("source_url") else "")
     target["credit_code"] = compact(target["credit_code"]).upper()
     target["registration_number"] = compact(target["registration_number"])
     if not target["shop_name"]:

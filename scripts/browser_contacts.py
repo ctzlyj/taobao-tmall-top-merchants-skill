@@ -1,6 +1,6 @@
 import re
 from datetime import datetime, timezone
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 PHONE = re.compile(r"(?:1[3-9]\d{9}|0\d{2,3}[-\s]?\d{7,8}|400[-\s]?\d{3}[-\s]?\d{4})")
 SECRET = re.compile(r"(?:cookie|authorization|api[-_]?key|token|password)\s*[:=]", re.I)
@@ -34,6 +34,23 @@ def public_url(value, riskbird=False):
     if not valid:
         raise ValueError("INVALID_SOURCE_URL")
     return value
+
+
+def riskbird_detail_url(value):
+    """Normalize a Riskbird detail URL to the public entid parameter only.
+
+    Search result pages append tracking parameters such as fuzzyId/position; the
+    webcli riskbird adapter rejects those URLs with INVALID_REQUEST. Only the
+    public routing parameter is preserved, without inventing identifiers.
+    """
+    try:
+        parsed = urlsplit(text(value))
+    except ValueError:
+        raise ValueError("INVALID_SOURCE_URL") from None
+    kept = [(key, item) for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+            if key == "entid"]
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path,
+                      urlencode(kept, doseq=True), ""))
 
 
 def recent(value):
