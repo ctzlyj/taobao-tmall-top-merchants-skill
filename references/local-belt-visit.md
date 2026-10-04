@@ -10,7 +10,7 @@
 2. **parse**：合并多轮结果，按公司名去重、字段互补，按类目词、经营状态、制造痕迹和区域命中打分排序，输出 `companies.json`。排序只是拜访优先级线索，不是准入结论。
 3. **verify**：对重点候选逐家风鸟核验。先风鸟精确名称搜索取详情链接，再调用 `webcli riskbird company` 适配器做名称+信用代码身份核验并读取企业公示头部电话/邮箱。
 4. **trademarks**：对已核验企业读取风鸟详情页"知识产权"页签，取商标/专利总数和首页已注册商标明细，用于"有品牌商标优先"排序。`--session <任务会话> --out-dir <绝对路径> --ip-file riskbird_ip.json`，导航间隔同样 ≥20 秒。
-5. **contact-fallback**：联系方式获取优先级是**浏览器自动化优先，API 兜底**。只有浏览器路径拿不到电话的企业（风鸟未收录/适配器失败/核验通过但电话未披露）才允许进入兜底；已拿到电话的企业绝不重复消耗 API。运行 `--out-dir <绝对路径> --allow-paid-api --config <MCP配置>`，复用企查查 MCP `get_contact_info`（风鸟 basic API 不含电话/邮箱，兜底只能用企查查联系方式接口）。`--allow-paid-api` 是花费闸门：用户已在任务中给出"查不到再用 API"的授权时直接携带该参数执行，无需再次向用户确认；输出 `api_contact_fallback.json`，幂等可续跑。
+5. **contact-fallback**：联系方式获取优先级是**浏览器自动化 → 免费公开来源碎片交叉验证 → API 兜底**。浏览器路径拿不到电话的企业（风鸟未收录/适配器失败/核验通过但电话未披露）先按 `references/public-phone-hunt.md` 找其他免费公开来源的遮罩碎片并用 `scripts/public_phone_hunt.py` 交叉验证（成立得号、不成立保留遮罩），仍无结果才允许付费 API；已拿到电话的企业绝不重复消耗 API。运行 `--out-dir <绝对路径> --allow-paid-api --config <MCP配置>`，复用企查查 MCP `get_contact_info`（风鸟 basic API 不含电话/邮箱，兜底只能用企查查联系方式接口）。`--allow-paid-api` 是花费闸门：用户已在任务中给出"查不到再用 API"的授权时直接携带该参数执行，无需再次向用户确认；输出 `api_contact_fallback.json`，幂等可续跑。
 
 ## API 兜底的交付规则
 

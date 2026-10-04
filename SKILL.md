@@ -8,12 +8,12 @@ description: 用于淘宝/天猫类目招商、用户指定商家建联、企业
 ## 先选模式，只读相应参考资料
 
 - **浏览器只读模式**：企业查询默认使用网页，先读 `~/.agents/skills/browser-task-router/SKILL.md` 和 `references/browser-enterprise.md`，自主组合工具；优先复用已登录 WebCLI/站点适配器，不为换工具重新登录。不调用付费预检/MCP，不要求双Key；`enterprise_pipeline.py` 默认网页模式，未验证渠道保持待验证。只有用户重新明确授权付费API才启用 `--mode paid-api --allow-paid-api`，以下双Key门槛仅适用于API模式。
-- **网页补查来源**：风鸟、企查查、爱企查；优先用户指定且可用的渠道，否则保留已验证路径，缺号码、缺联系人或需交叉核验时再补查。爱企查入口 `https://m.aiqicha.com/`，按 `references/aiqicha-web.md` 执行；受限不等于未披露，不为凑三源重复查询或绕过页面限制。
+- **网页补查来源**：风鸟、企查查、爱企查；优先用户指定且可用的渠道，否则保留已验证路径，缺号码、缺联系人或需交叉核验时再补查。爱企查入口 `https://m.aiqicha.com/`，按 `references/aiqicha-web.md` 执行；受限不等于未披露，不为凑三源重复查询或绕过页面限制。某平台号码被会员墙挡住时，按 `references/public-phone-hunt.md` 用其他免费公开来源做遮罩碎片交叉验证（`scripts/public_phone_hunt.py`），验证不成立不拼号。
 
 - **类目发现模式**：只有类目、需要发现优质商家。运行发现与商品样本初筛，详见 `references/workflow.md`。默认目标SPU≥10、样本相关占比≥30%，≥50%为高匹配；淘宝/C店与天猫同一门槛。搜索样本不代表全店主营占比，也不能宣称全市场Top排名。
 - **用户指定名单模式**：提供店铺名、多个链接、文本、表格、电子表格或混合信息。由Agent归一化，不要求用户改成固定模板；明确名单优先，未经要求不扩商家。名单店铺全部进入正式招商商家；不运行 `create_job.py`、`mine_taobao.py`、`audit_shops.py`、`audit_storefronts.py`，不为补企业字段打开淘宝。不得补造目标SPU、店内目标商品占比、付款人数展示下限或Top30结论。交付注明“用户指定名单，不代表Top30或主营准入达标”。详见 `references/workflow.md` 的名单分支。
 - **审核筛选模式**：已有店铺行，需要填写引入画像与优先级；不得并入用户指定名单模式。运行 `scripts/review_workbook.py`，先 `--dry-run`，再确认负责人/语义列后执行。只处理指定负责人、两项结果均空的行，保留重复源行与空白占位。详见 `references/review-mode.md`。
-- **区域走访模式**：用户给区域/产业带和类目，要线下拜访当地公司或工厂。运行 `scripts/local_belt_discovery.py`（collect→parse→verify→trademarks→contact-fallback），企查查检索候选、风鸟核验身份与公示联系方式并读取知识产权页签的商标/专利数据（有品牌商标优先）；联系方式**浏览器自动化优先**，仅对浏览器拿不到电话的企业用企查查API兜底（`--allow-paid-api`，用户授权"查不到再用API"后直接执行）。交付按拜访路线分组的 xlsx 清单；同名企业冲突、虚拟号和单源联系方式必须如实标注，企查查限流即整批停止转风鸟，详见 `references/local-belt-visit.md`。
+- **区域走访模式**：用户给区域/产业带和类目，要线下拜访当地公司或工厂。运行 `scripts/local_belt_discovery.py`（collect→parse→verify→trademarks→contact-fallback），企查查检索候选、风鸟核验身份与公示联系方式并读取知识产权页签的商标/专利数据（有品牌商标优先）；联系方式**浏览器自动化优先**，浏览器拿不到电话的企业先按 `references/public-phone-hunt.md` 做免费公开来源碎片交叉验证，仍无结果才用企查查API兜底（`--allow-paid-api`，用户授权"查不到再用API"后直接执行）。交付按拜访路线分组的 xlsx 清单；同名企业冲突、虚拟号和单源联系方式必须如实标注，企查查限流即整批停止转风鸟，详见 `references/local-belt-visit.md`。
 
 既无类目也无名单时只询问一次；类目歧义才确认商品边界。输入缺字段不等于淘汰，保留原文和来源。
 
@@ -59,6 +59,7 @@ description: 用于淘宝/天猫类目招商、用户指定商家建联、企业
 - 流程/类目边界：`references/workflow.md`、`references/category-rules.md`
 - 企业编排/恢复/回滚：`references/enterprise-workflow.md`
 - 爱企查网页补查/受限处理：`references/aiqicha-web.md`
+- 会员墙电话替代/碎片交叉验证：`references/public-phone-hunt.md`
 - 数据/主体证据：`references/data-contract.md`
 - 审核模式：`references/review-mode.md`、`references/review-data-contract.md`
 - 区域走访模式：`references/local-belt-visit.md`

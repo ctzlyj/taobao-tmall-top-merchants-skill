@@ -42,7 +42,7 @@ HTTP 200、标题出现“爱企查”、已安装浏览器工具或拿到首页
 
 在任务目录保存 `aiqicha_observations.json`，不覆盖此前商家结果；恢复诊断另存回执并指向前次记录。每个目标记录 `shop_name`、`company`、强身份字段、`source: aiqicha_web`、`status`、已观察的 `source_url`、`captured_at` 和 `evidence_type`（例如 `agent_observed_webpage` / `user_provided_screenshot`）。企业尚未尝试查询时用 `status: not_queried`，另记实际 `site_status` 与站点提示；已尝试搜索但被验证码拦截则用 `challenge_required`，企业详情完成数仍为0，其他目标不能计为已查询。区分首页可读、搜索尝试、详情完成和新号码数；不得补造详情URL、号码、法人或查询成功状态。缺少原始观察时刻时留空，只记已知日期及回执保存时间。
 
-确实读取到的联系方式用 `phones`、`emails` 和最小范围原文 `excerpt` 保存。没有完整号码时保留原始遮罩文字，不新增可拨电话。仅对来源明确标注的“号码—联系人”生成 `contact_evidence`：`phone`、`person`、`role`、`company`、实际详情URL `source_url`、有依据的 `captured_at`、对应原文 `excerpt`、`association: explicit`；多号多人逐个处理。
+确实读取到的联系方式用 `phones`、`emails` 和最小范围原文 `excerpt` 保存。没有完整号码时保留原始遮罩文字；遮罩碎片可按 `references/public-phone-hunt.md` 与其他免费公开来源交叉验证，成立才经 `scripts/public_phone_hunt.py` 生成完整号码，否则不新增可拨电话。仅对来源明确标注的“号码—联系人”生成 `contact_evidence`：`phone`、`person`、`role`、`company`、实际详情URL `source_url`、有依据的 `captured_at`、对应原文 `excerpt`、`association: explicit`；多号多人逐个处理。
 
 复用 `browser_contacts.contact_rows(record, contact_evidence)` 完成逐号码称呼与冲突处理。它处理的是已核验的证据，不会搜索爱企查，也不能证明输入证据来自实时网页；生成“explicit”前必须观察到实际对应关系。用它处理新增爱企查号码前，Agent负责完成企业身份核验，不用它替代网页取数或主体校验。
 
