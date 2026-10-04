@@ -241,11 +241,27 @@ def relevant_trademarks(rows):
             if (row.get("class") or "").startswith(RELEVANT_TRADEMARK_CLASSES)]
 
 
+def webcli_base():
+    """Resolve the webcli entry command for this machine.
+
+    `o2 launch webcli` swallows stdout on some Windows hosts, which breaks JSON
+    parsing for every browser/adapter call. Prefer an explicit override, then
+    the local node install, and only fall back to o2 when neither exists.
+    """
+    override = os.environ.get("WEBCLI_MAIN_JS")
+    if override:
+        return [override]
+    node_main = Path("D:/CodexTools/npm-global/node_modules/@jd/webcli/dist/src/main.js")
+    if node_main.exists():
+        return ["C:/Program Files/nodejs/node.exe", str(node_main)]
+    return ["o2", "launch", "webcli"]
+
+
 def run_webcli(arguments, timeout=130):
     environment = os.environ.copy()
     environment["WEBCLI_WINDOW"] = "background"
     environment.pop("NODE_OPTIONS", None)
-    result = subprocess.run(["o2", "launch", "webcli", *arguments],
+    result = subprocess.run([*webcli_base(), *arguments],
                             capture_output=True, text=True, encoding="utf-8", errors="replace",
                             timeout=timeout, check=False, env=environment,
                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -262,11 +278,12 @@ def browser_eval(session, script, timeout=90):
     return run_webcli(["browser", session, "eval", script], timeout=timeout)
 
 
-def collect_queries(queries, session, output_path, wait_open=8, wait_between=6):
+def collect_queries(queries, session, output_path, wait_open=8, wait_between=6, blank_stop=3):
     all_results = (json.loads(Path(output_path).read_text(encoding="utf-8"))
                    if Path(output_path).exists() else [])
     done = {row.get("query") for row in all_results}
     stopped = False
+    consecutive_blanks = 0
     for index, query in enumerate(queries, 1):
         if query in done:
             print(f"[{index}/{len(queries)}] cached {query}", flush=True)
@@ -282,6 +299,14 @@ def collect_queries(queries, session, output_path, wait_open=8, wait_between=6):
         write_json(output_path, all_results)
         if payload.get("challenge"):
             print("CHALLENGE DETECTED - STOPPING", flush=True)
+            stopped = True
+            break
+        if payload.get("bodyLength", 0) == 0 and not payload.get("cards"):
+            consecutive_blanks += 1
+        else:
+            consecutive_blanks = 0
+        if consecutive_blanks >= blank_stop:
+            print("QCC SOFT BLOCK (blank pages) - STOPPING", flush=True)
             stopped = True
             break
         time.sleep(wait_between)

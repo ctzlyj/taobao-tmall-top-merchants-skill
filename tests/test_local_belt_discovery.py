@@ -197,6 +197,44 @@ class LocalBeltDiscoveryTests(unittest.TestCase):
         result = self.module.api_contact_fallback(companies, details, ExplodingClient(), path)
         self.assertEqual(result[0]["status"], "not_disclosed")
 
+    def test_webcli_base_prefers_env_override_and_local_node_install(self):
+        import os
+        original = os.environ.get("WEBCLI_MAIN_JS")
+        os.environ["WEBCLI_MAIN_JS"] = r"C:\fake\webcli\main.js"
+        try:
+            self.assertEqual(self.module.webcli_base(), [r"C:\fake\webcli\main.js"])
+        finally:
+            if original is None:
+                os.environ.pop("WEBCLI_MAIN_JS", None)
+            else:
+                os.environ["WEBCLI_MAIN_JS"] = original
+
+    def test_collect_stops_after_consecutive_blank_pages(self):
+        blank_payload = {"total": None, "cards": [], "challenge": False, "bodyLength": 0}
+        opened = []
+
+        def fake_run(arguments, timeout=130):
+            if arguments[-1].startswith("https"):
+                opened.append(arguments[-1])
+                return {}
+            return blank_payload
+
+        original_run = self.module.run_webcli
+        self.module.run_webcli = fake_run
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "results.json"
+                self.module.collect_queries(["示例市 沐浴1", "示例市 沐浴2", "示例市 沐浴3",
+                                            "示例市 沐浴4", "示例市 沐浴5"],
+                                            "session", output, wait_open=0, wait_between=0,
+                                            blank_stop=3)
+                saved = json.loads(output.read_text(encoding="utf-8"))
+                self.assertEqual(len(saved), 3)
+                self.assertEqual(len(opened), 3)
+                self.assertTrue(all(row["bodyLength"] == 0 for row in saved))
+        finally:
+            self.module.run_webcli = original_run
+
     def _temp_path(self, filename):
         return Path(self.test_dir.name) / filename
 
