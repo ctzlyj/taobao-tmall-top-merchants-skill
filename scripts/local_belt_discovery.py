@@ -400,9 +400,81 @@ def read_riskbird_ip(companies, session, search_rows, output_path, interval=20, 
     return saved
 
 
+def needs_api_fallback(detail_row):
+    """True when the browser path failed to yield any company phone.
+
+    The recruitment contact policy is browser-first: companies already verified
+    with a public phone never touch the paid API. Only rows that are missing in
+    Riskbird, failed adapter verification, or verified with an empty phone list
+    qualify for the QCC get_contact_info fallback.
+    """
+    if not isinstance(detail_row, dict):
+        return True
+    if detail_row.get("status") not in ("ok", "ok_conflict_retry"):
+        return True
+    return not (detail_row.get("detail") or {}).get("phones")
+
+
+def api_contact_fallback(companies, details, client, output_path, interval=0.8):
+    """QCC API fallback for companies whose browser lookup produced no phone.
+
+    Paid-API usage is gated by the CLI flag; this function only processes the
+    phoneless subset, keeps identity conflicts as conflicts, and records the
+    qcc_api provenance so the visit workbook can label the phone source.
+    """
+    from enrich_companies import normalize_contact_reply
+    from subject_identity import normalized_name
+
+    by_name = {}
+    for row in details or []:
+        previous = by_name.get(row.get("name"))
+        if previous is None or (row.get("status") in ("ok", "ok_conflict_retry")
+                                and previous.get("status") not in ("ok", "ok_conflict_retry")):
+            by_name[row.get("name")] = row
+    saved = (json.loads(Path(output_path).read_text(encoding="utf-8"))
+             if Path(output_path).exists() else [])
+    done = {row.get("name") for row in saved}
+    for company in companies:
+        name = company["name"]
+        if name in done:
+            continue
+        if not needs_api_fallback(by_name.get(name)):
+            continue
+        reply = normalize_contact_reply(client.call(
+            "get_contact_info", {"searchKey": name, "excludeInvalidPhone": True}))
+        contact = reply.get("联系方式信息") if isinstance(reply, dict) else None
+        phones = []
+        emails = []
+        status = "ok"
+        if not isinstance(contact, dict):
+            status = "not_disclosed"
+        else:
+            reply_name = (reply.get("企业名称") or "").strip()
+            if reply_name and normalized_name(reply_name) != normalized_name(name):
+                status = "api_identity_conflict"
+            else:
+                phones = list(dict.fromkeys(contact.get("电话") or []))
+                emails = list(dict.fromkeys(contact.get("邮箱") or []))
+                if not phones:
+                    status = "not_disclosed"
+        saved.append({
+            "name": name,
+            "status": status,
+            "phones": phones,
+            "emails": emails,
+            "source": "qcc_api",
+            "tool": "get_contact_info",
+            "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        })
+        write_json(output_path, saved)
+        print(f"{name}: fallback {status} phones={phones}", flush=True)
+        time.sleep(max(0, interval))
+    return saved
+
+
 def main():
     parser = argparse.ArgumentParser(description="区域产业带走访发现：企查查检索 + 风鸟核验，零付费API")
-    parser.add_argument("phase", choices=["collect", "parse", "verify", "trademarks"])
+    parser.add_argument("phase", choices=["collect", "parse", "verify", "trademarks", "contact-fallback"])
     parser.add_argument("--region", help="区域名，例如：邳州")
     parser.add_argument("--keywords", help="逗号分隔类目词，例如：沐浴,泡脚,木梳")
     parser.add_argument("--suffixes", default="", help="可选逗号分隔后缀，例如：制造,电子商务")
@@ -413,6 +485,9 @@ def main():
     parser.add_argument("--search-file", default="riskbird_search.json")
     parser.add_argument("--details-file", default="riskbird_details.json")
     parser.add_argument("--ip-file", default="riskbird_ip.json")
+    parser.add_argument("--fallback-file", default="api_contact_fallback.json")
+    parser.add_argument("--allow-paid-api", action="store_true")
+    parser.add_argument("--config", default=str(Path.home() / ".codex/config.toml"))
     parser.add_argument("--limit", type=int, help="verify 阶段最多处理的企业数")
     parser.add_argument("--interval", type=float, default=20, help="风鸟导航最小间隔秒数")
     args = parser.parse_args()
@@ -451,6 +526,17 @@ def main():
         search_rows = json.loads((out_dir / args.search_file).read_text(encoding="utf-8"))
         read_riskbird_ip(companies, args.session, search_rows, out_dir / args.ip_file,
                          interval=max(0, args.interval), limit=args.limit)
+    elif args.phase == "contact-fallback":
+        if not args.allow_paid_api:
+            raise SystemExit("PAID_API_NOT_AUTHORIZED: browser-first policy; only missing-phone "
+                             "companies may use the QCC API, pass --allow-paid-api explicitly")
+        from enrich_companies import QccClient, load_qcc_server
+        companies = json.loads((out_dir / args.companies).read_text(encoding="utf-8"))
+        details = json.loads((out_dir / args.details_file).read_text(encoding="utf-8")) \
+            if (out_dir / args.details_file).exists() else []
+        url, auth = load_qcc_server(args.config)
+        api_contact_fallback(companies, details, QccClient(url, auth),
+                             out_dir / args.fallback_file, interval=max(0, args.interval))
 
 
 if __name__ == "__main__":

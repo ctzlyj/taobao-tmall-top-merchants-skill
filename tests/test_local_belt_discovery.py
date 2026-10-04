@@ -1,3 +1,5 @@
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -9,6 +11,7 @@ class LocalBeltDiscoveryTests(unittest.TestCase):
     def setUp(self):
         import sys
         self.modules_backup = dict(sys.modules)
+        self.test_dir = tempfile.TemporaryDirectory()
         sys.path.insert(0, str(ROOT / "scripts"))
         import local_belt_discovery
         self.module = local_belt_discovery
@@ -19,6 +22,7 @@ class LocalBeltDiscoveryTests(unittest.TestCase):
         for name, module in self.modules_backup.items():
             if sys.modules.get(name) is not module:
                 sys.modules[name] = module
+        self.test_dir.cleanup()
 
     def test_build_queries_combines_region_keywords_suffixes_and_dedupes(self):
         queries = self.module.build_queries("示例市", ["沐浴", "木梳"], ["制造"])
@@ -123,6 +127,78 @@ class LocalBeltDiscoveryTests(unittest.TestCase):
         for marker in ("知识产权", "商标", "曾用名", "全称", "table.xs-descriptions-box",
                        "web_searchBrand", "verify.qcc.com/limits"):
             self.assertIn(marker, reference)
+
+    def test_needs_api_fallback_only_when_browser_path_has_no_phone(self):
+        self.assertTrue(self.module.needs_api_fallback(None))
+        self.assertTrue(self.module.needs_api_fallback({"status": "not_found_in_riskbird"}))
+        self.assertTrue(self.module.needs_api_fallback({"status": "adapter_failed"}))
+        self.assertTrue(self.module.needs_api_fallback(
+            {"status": "ok", "detail": {"phones": [], "contact_status": "not_disclosed"}}))
+        self.assertFalse(self.module.needs_api_fallback(
+            {"status": "ok", "detail": {"phones": ["13800000000"]}}))
+        self.assertFalse(self.module.needs_api_fallback({"status": "ok_conflict_retry",
+                                                         "detail": {"phones": ["0516-1234567"]}}))
+
+    def test_api_contact_fallback_queries_only_phoneless_companies(self):
+        companies = [{"name": "示例市甲日用品有限公司"}, {"name": "示例市乙制品厂"}]
+        details = [{"name": "示例市甲日用品有限公司", "status": "ok",
+                    "detail": {"phones": ["13800000000"], "emails": []}}]
+        calls = []
+
+        class FakeClient:
+            def call(self, name, arguments):
+                calls.append((name, arguments))
+                return {"企业名称": "示例市乙制品厂", "联系方式信息": {"电话": ["0516-87654321"], "邮箱": []}}
+
+        result = self.module.api_contact_fallback(
+            companies, details, FakeClient(), self._temp_path("fallback.json"))
+        self.assertEqual(len(result), 1)
+        self.assertEqual(calls, [("get_contact_info", {"searchKey": "示例市乙制品厂", "excludeInvalidPhone": True})])
+        self.assertEqual(result[0]["name"], "示例市乙制品厂")
+        self.assertEqual(result[0]["status"], "ok")
+        self.assertEqual(result[0]["phones"], ["0516-87654321"])
+        self.assertEqual(result[0]["source"], "qcc_api")
+
+    def test_api_contact_fallback_keeps_conflict_and_nondisclosure(self):
+        companies = [{"name": "示例市丙制品厂"}, {"name": "示例市丁商贸有限公司"}]
+        details = []
+
+        class FakeClient:
+            def __init__(self):
+                self.replies = [
+                    {"企业名称": "完全不同的公司", "联系方式信息": {"电话": ["13900000000"], "邮箱": []}},
+                    {"企业名称": "示例市丁商贸有限公司",
+                     "搜索结果": "已全量扫描该主体联系方式数据库，未发现任何记录。",
+                     "联系方式信息": None},
+                ]
+
+            def call(self, name, arguments):
+                return self.replies.pop(0)
+
+        result = self.module.api_contact_fallback(
+            companies, details, FakeClient(), self._temp_path("fallback2.json"))
+        self.assertEqual(result[0]["status"], "api_identity_conflict")
+        self.assertEqual(result[0]["phones"], [])
+        self.assertEqual(result[1]["status"], "not_disclosed")
+        self.assertEqual(result[1]["phones"], [])
+
+    def test_api_contact_fallback_is_idempotent_for_saved_companies(self):
+        companies = [{"name": "示例市乙制品厂"}]
+        details = []
+        path = self._temp_path("fallback3.json")
+        path.write_text(json.dumps([{"name": "示例市乙制品厂", "status": "not_disclosed",
+                                     "phones": [], "source": "qcc_api"}], ensure_ascii=False),
+                        encoding="utf-8")
+
+        class ExplodingClient:
+            def call(self, *_args):
+                raise AssertionError("paid API must not be called for saved companies")
+
+        result = self.module.api_contact_fallback(companies, details, ExplodingClient(), path)
+        self.assertEqual(result[0]["status"], "not_disclosed")
+
+    def _temp_path(self, filename):
+        return Path(self.test_dir.name) / filename
 
 
 if __name__ == "__main__":
