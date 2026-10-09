@@ -97,3 +97,10 @@ python scripts/enterprise_pipeline.py --job-dir <绝对任务目录> --limit 1 -
 联系人回归：页面只有“法人：示例甲”和“电话：010-12345678”，没有对应联系人标签时，联系人须为未确认，不能交付“示例甲的手机”或推荐直接称呼其姓名。页面另明确写“商务联系人示例乙，电话010-12345678”时，可报告来源标注的示例乙，仍注明未拨通验证。此规则是交付语义，文档契约测试不等同于网站新增字段自动解析验收。
 
 补充回归：同一企业两个号码仅一个带姓名时，另一个保持未确认；同一号码在两个来源分别标示例乙与示例丙时保留冲突，不挑一个称呼；仅有“张经理”时不编造全名或性别。
+
+## 2026-10-09 批量自动化实测补充（Windows/Python 驱动）
+
+- Python `subprocess` 直接调用 `webcli` 会经过 `.cmd`/`.ps1` 包装被 cmd.exe 二次解析，eval JS 里的 `||`、`()` 会被当成管道和语法符号，报 `SyntaxError: Unexpected end of input`（已复现）。批量脚本必须直连 `C:\Program Files\nodejs\node.exe` + `D:\CodexTools\npm-global\node_modules\@jd\webcli\dist\src\main.js`，并保留 `WEBCLI_WINDOW=background`、`PYTHONIOENCODING=utf-8`。
+- 风鸟搜索下拉点击目标必须选最内层公司名元素（候选列表里 innerText 最短且包含搜索词的那一项）；点外层容器不会触发下拉项 handler，window.open 截获不到带 entid 的详情 URL。截获方式：先 `window.__savedOpen=window.open; window.open=function(u){window.__taskTarget=u;return null}`，点击后读取 `window.__taskTarget`，再恢复 window.open。
+- 风鸟详情页"知识产权"页签用 `innerText.trim().startsWith('知识产权') && length<12` 定位（页签文本含数量）；商标表可用正则 `名称\t第N类 分类\t状态` 直接从 innerText 提取；专利表是懒加载，首轮 innerText 只有表头空行，不要为专利明细反复等待。
+- 批量脚本要边跑边落盘（每家企业一个 JSON 记录），并按"无 detail_url/raw 才重试"做断点续跑；两个脚本实例同时写同一结果文件会互相覆盖，启动前先确认旧进程已退出。
