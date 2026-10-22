@@ -7,6 +7,8 @@ description: 用于淘宝/天猫类目招商、用户指定商家建联、企业
 
 ## 先选模式，只读相应参考资料
 
+- 区域招商与走访先核具体商品、图片和店铺主体，头部线索与普通对口商家分层交付，见 `references/product-first-recruitment.md`。
+
 - **浏览器只读模式**：企业查询默认使用网页，先读 `~/.agents/skills/browser-task-router/SKILL.md` 和 `references/browser-enterprise.md`，自主组合工具；优先复用已登录 WebCLI/站点适配器，不为换工具重新登录。不调用付费预检/MCP，不要求双Key；`enterprise_pipeline.py` 默认网页模式，未验证渠道保持待验证。只有用户重新明确授权付费API才启用 `--mode paid-api --allow-paid-api`，以下双Key门槛仅适用于API模式。
 - **网页补查来源**：风鸟、企查查、爱企查；优先用户指定且可用的渠道，否则保留已验证路径，缺号码、缺联系人或需交叉核验时再补查。爱企查入口 `https://m.aiqicha.com/`，按 `references/aiqicha-web.md` 执行；受限不等于未披露，不为凑三源重复查询或绕过页面限制。某平台号码被会员墙挡住时，按 `references/public-phone-hunt.md` 用其他免费公开来源做遮罩碎片交叉验证（`scripts/public_phone_hunt.py`），验证不成立不拼号。
 
