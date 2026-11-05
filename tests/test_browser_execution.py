@@ -42,19 +42,26 @@ class PaidGateTests(unittest.TestCase):
             self.assertEqual(enterprise_pipeline.main(), 0)
         run.assert_called_once()
 
-    def test_default_preflight_does_not_probe_keys_or_browser(self):
+    def test_default_preflight_checks_browser_but_never_probes_keys_or_credentials(self):
+        disconnected = {
+            "ok": True,
+            "connectivity": {"ok": True},
+            "profiles": [{"extensionConnected": False}],
+        }
         with patch.object(sys, "argv", ["preflight"]), \
                 patch.object(preflight, "validate_qcc", side_effect=AssertionError("paid probe")), \
                 patch.object(preflight, "validate_fengniao", side_effect=AssertionError("paid probe")), \
-                patch.object(preflight, "webcli_doctor", side_effect=AssertionError("browser touched")), \
                 patch.object(preflight, "detect_mcp", side_effect=AssertionError("credentials loaded")), \
+                patch.object(preflight, "webcli_doctor", return_value=disconnected), \
                 contextlib.redirect_stdout(io.StringIO()) as output:
             with self.assertRaises(SystemExit) as exit_context:
                 preflight.main()
-        self.assertEqual(exit_context.exception.code, 0)
+        self.assertEqual(exit_context.exception.code, 2)
         result = json.loads(output.getvalue())
         self.assertEqual(result["paid_api_calls"], 0)
         self.assertEqual(result["login"], "not_probed")
+        self.assertFalse(result["webcli"]["browser_ready"])
+        self.assertIn("chrome://extensions", "\n".join(result["next"]))
 
     def test_legacy_commands_require_paid_opt_in_before_loading_credentials(self):
         import enrich_companies

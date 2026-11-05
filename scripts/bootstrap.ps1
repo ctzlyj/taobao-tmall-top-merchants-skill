@@ -64,6 +64,8 @@ if (-not $python) {
 }
 
 Write-Host "Using Python: $python"
+Write-Host "首次自检：检查 Python/依赖、o2/WebCLI/浏览器连接、淘宝登录状态和工作目录权限。"
+Write-Host "浏览器检查只读、走后台标签，不调用付费接口；缺项会给出可照做的下一步。"
 if ($ConfigureEnterpriseKeys) {
     & $python (Join-Path $scriptRoot "configure_enterprise_keys.py")
     if ($LASTEXITCODE -ne 0) {
@@ -83,4 +85,7 @@ if (-not $SkipTaobaoCheck) {
     $arguments += "--enterprise-only"
 }
 & $python @arguments
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "自检通过（ok=true）。可以直接下达查询任务；结果文件会写在当前工作目录。"
+}
 exit $LASTEXITCODE

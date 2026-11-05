@@ -137,6 +137,24 @@ def install_webcli():
     return code == 0, out or err
 
 
+def webcli_runner():
+    """优先直连 webcli（避免 o2 launch 在 Windows 丢子进程 stdout），o2 兜底。"""
+    try:
+        from browser_enterprise import webcli_command
+        return webcli_command()
+    except Exception:
+        pass
+    node = shutil.which("node")
+    o2_package = Path.home() / ".o2/npm/node_modules/@jd/webcli/package.json"
+    if node and o2_package.is_file():
+        entry = json.loads(o2_package.read_text(encoding="utf-8")).get("bin", {}).get("webcli", "")
+        main = (o2_package.parent / entry).resolve()
+        if main.is_file():
+            return [node, str(main)]
+    o2 = find_o2()
+    return [o2, "launch", "webcli"] if o2 else None
+
+
 def install_webcli_extension(extension_dir=None):
     o2 = find_o2()
     if not o2:
@@ -185,10 +203,10 @@ def install_qcc(config_path):
 
 
 def webcli_doctor():
-    o2 = find_o2()
-    if not o2:
-        return {"ok": False, "error": "o2 missing"}
-    code, out, err = run([o2, "launch", "webcli", "--json", "doctor"])
+    command = webcli_runner()
+    if not command:
+        return {"ok": False, "error": "webcli missing"}
+    code, out, err = run(command + ["--json", "doctor"])
     if code:
         return {"ok": False, "error": err or out}
     try:
@@ -286,10 +304,32 @@ def review_structure_status(root=None):
     return {"ok": not missing, "missing": missing}
 
 
+def directory_permissions_status(paths=None):
+    skill_root = Path(__file__).resolve().parents[1]
+    targets = list(paths or [("current_workdir", Path.cwd()), ("skill_root", skill_root)])
+    details = {}
+    for name, path in targets:
+        try:
+            resolved = Path(path).resolve()
+            probe = resolved / ".preflight_write_probe"
+            probe.write_text("", encoding="utf-8")
+            probe.unlink()
+            details[name] = {"ok": True, "path": str(resolved)}
+        except OSError as error:
+            details[name] = {"ok": False, "path": str(path), "error": type(error).__name__}
+    # 任务产物写入当前工作目录；安装目录只读不影响运行，仅提示。
+    workdir_ok = details.get("current_workdir", {}).get("ok", True)
+    return {"ok": workdir_ok, "paths": details}
+
+
 def build_status(
     *, audit_only, runtime, packages, o2_path, doctor, browser_ready, taobao,
     mcps, qcc, fengniao, actions, review_structure=None, enterprise_only=False,
+    directory=None, enterprise_required=None,
 ):
+    if enterprise_required is None:
+        enterprise_required = not audit_only
+    directory = directory or {"ok": True, "paths": {}}
     enterprise_ready = enterprise_sources_ready(qcc, fengniao)
     structure = review_structure or {"ok": True, "missing": []}
     required_ready = (
@@ -298,10 +338,11 @@ def build_status(
         and (bool(o2_path) or enterprise_only)
         and (browser_ready or enterprise_only)
         and (taobao is None or bool(taobao.get("loggedIn")))
-        and (structure["ok"] if audit_only else enterprise_ready)
+        and directory["ok"]
+        and (structure["ok"] if audit_only else (enterprise_ready if enterprise_required else True))
     )
     result = {
-        "ok": required_ready if audit_only else required_ready and enterprise_ready,
+        "ok": False,
         "audit_only": audit_only,
         "enterprise_only": enterprise_only,
         "python": runtime,
@@ -312,17 +353,23 @@ def build_status(
         "fengniao": fengniao,
         "webcli": {**doctor, "browser_ready": browser_ready},
         "taobao": taobao,
+        "login": ("not_probed" if taobao is None else ("ok" if taobao.get("loggedIn") else "logged_out")),
+        "paid_api_calls": 0,
         "review_structure": structure,
+        "directory": directory,
+        "enterprise_required": enterprise_required,
         "actions": actions,
         "next": [],
     }
     if not runtime["ok"]:
-        result["next"].append("Install Python 3.11 or newer, then rerun scripts/bootstrap.ps1")
+        result["next"].append("本机 Python 低于 3.11：重新运行 powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1，让脚本自动安装 Python 3.11 后重开终端再自检。")
     if not packages["ok"]:
-        result["next"].append("Install required Python packages from requirements.txt")
+        result["next"].append("缺少依赖：重新运行 scripts/bootstrap.ps1（自动带 --install-missing 安装 requirements.txt）。")
+    if not directory["ok"]:
+        result["next"].append("当前工作目录不可写：换到桌面新建文件夹等可写目录后重新自检；安装目录只读不影响使用。")
     if not o2_path and not enterprise_only:
-        result["next"].append("Install o2 with the configured JD Python package index")
-    if not audit_only and not enterprise_ready:
+        result["next"].append("o2 未安装：运行 scripts/bootstrap.ps1，会通过京东内网源自动安装。")
+    if enterprise_required and not audit_only and not enterprise_ready:
         result["next"].extend(
             [
                 "必须同时提供并验证企查查 Key 与风鸟 Key，缺一不可。把两个 Key 一起发给 Codex，由 Codex 通过标准输入安全配置；不要自行设置环境变量。",
@@ -333,19 +380,20 @@ def build_status(
     if not browser_ready and not enterprise_only:
         result["next"].extend(browser_setup_instructions())
     if taobao and not taobao.get("loggedIn"):
-        result["next"].append("Log in to Taobao in the connected Chrome tab, then rerun preflight")
+        result["next"].append("淘宝未登录：在后台标签完成登录后重新自检；验证码页面保持等待，不反复刷新。")
     if audit_only and not structure["ok"]:
         result["next"].append("Restore missing review-mode Skill files: " + ", ".join(structure["missing"]))
+    result["ok"] = required_ready if (audit_only or not enterprise_required) else required_ready and enterprise_ready
     return result
 
 
 def taobao_state(session):
-    o2 = find_o2()
-    if not o2:
-        return {"ok": False, "error": "o2 missing"}
-    run([o2, "launch", "webcli", "browser", session, "open", "https://www.taobao.com/"])
+    command = webcli_runner()
+    if not command:
+        return {"ok": False, "error": "webcli missing"}
+    run(command + ["browser", session, "open", "https://www.taobao.com/"])
     script = "(()=>{const t=document.body?document.body.innerText:'';return {url:location.href,title:document.title,risk:/验证码|访问被拒绝|滑动验证/.test(t),loggedIn:/消息|购物车|我的淘宝|已买到的宝贝/.test(t)&&!/亲，请登录/.test(t)}})()"
-    code, out, err = run([o2, "launch", "webcli", "browser", session, "eval", script])
+    code, out, err = run(command + ["browser", session, "eval", script])
     if code:
         return {"ok": False, "error": err or out}
     try:
@@ -370,13 +418,7 @@ def main():
 
     runtime = python_runtime_status()
     packages = python_packages_status()
-    if not args.audit_only and not args.allow_paid_api:
-        result = {"ok": runtime["ok"] and packages["ok"], "mode": "browser",
-                  "status": "local_checks_only", "paid_api_calls": 0, "login": "not_probed",
-                  "python": runtime, "python_packages": packages,
-                  "next": ["Read browser-task-router and references/browser-enterprise.md; verify the selected authenticated adapter without paid probes."]}
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        sys.exit(0 if result["ok"] else 2)
+    directory = directory_permissions_status()
     o2_path = find_o2()
     actions = []
 
@@ -401,11 +443,10 @@ def main():
         doctor = webcli_doctor()
 
     config_path = Path(args.config)
-    if args.audit_only:
-        mcps = []
-        qcc = {"configured": False, "key_configured": False, "validated": False, "skipped": True}
-        fengniao = {"installed": False, "key_configured": False, "validated": False, "skipped": True}
-    else:
+    mcps = []
+    qcc = {"configured": False, "key_configured": False, "validated": False, "skipped": True}
+    fengniao = {"installed": False, "key_configured": False, "validated": False, "skipped": True}
+    if not args.audit_only and args.allow_paid_api:
         mcps = detect_mcp(config_path)
         qcc = detect_qcc_mcp(config_path)
         fengniao = detect_fengniao(args.fengniao_skill_dir)
@@ -442,6 +483,8 @@ def main():
         actions=actions,
         review_structure=review_structure_status() if args.audit_only else None,
         enterprise_only=args.enterprise_only,
+        directory=directory,
+        enterprise_required=bool(args.allow_paid_api and not args.audit_only),
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     sys.exit(0 if result["ok"] else 2)

@@ -1,9 +1,16 @@
 ---
 name: taobao-tmall-top-merchants
+version: 1.1.0
 description: 用于淘宝/天猫类目招商、用户指定商家建联、企业主体补全，或审核已有店铺工作簿的引入画像与优先级。支持店铺名、链接、文本、表格和混合名单；不用于京东SKU识淘宝同款、批量发消息或未授权采集。
 ---
 
 # 淘宝/天猫top商家清单
+
+## 快速开始（新电脑/采销）
+
+- 标准提示词（一句话即可）：`请根据 https://o2.jd.com/install-skill.md，安装 skillId 10749@最新版本，然后帮我查询xxx公司的联系方式`。
+- 安装后第一步自检：`powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1`。自检覆盖 Python/依赖、o2/WebCLI/浏览器、淘宝登录与工作目录权限；缺项按 JSON `next` 的中文提示操作。浏览器检查走后台标签，只读、不调用付费接口。
+- 成功标志：自检输出 `"ok": true`；查询交付公司全称、信用代码、法人、地址、电话（含归属人/建议称呼、证据与确认状态）及来源链接，结果与证据 JSON 落在当前工作目录，未核字段标“未确认”。
 
 ## 先选模式，只读相应参考资料
 
@@ -21,7 +28,7 @@ description: 用于淘宝/天猫类目招商、用户指定商家建联、企业
 
 ## 就绪门槛
 
-- API模式的类目发现/名单任务必须同时提供并验证企查查 Key 与风鸟 Key，缺一不可；风鸟公共额度不能替代私有 Key，不以其他企业源绕过API模式门槛。经明确付费授权才运行 `scripts/bootstrap.ps1 -AllowPaidApi` 或 `preflight.py --allow-paid-api --install-missing`；名单模式加 `-SkipTaobaoCheck`，API企业查询本身不依赖浏览器。默认预检仅检查本地Python环境，不验证网页登录或企业Key。
+- API模式的类目发现/名单任务必须同时提供并验证企查查 Key 与风鸟 Key，缺一不可；风鸟公共额度不能替代私有 Key，不以其他企业源绕过API模式门槛。经明确付费授权才运行 `scripts/bootstrap.ps1 -AllowPaidApi` 或 `preflight.py --allow-paid-api --install-missing`；名单模式加 `-SkipTaobaoCheck`，API企业查询本身不依赖浏览器。默认自检不调用付费接口、不要求双Key，但会检查浏览器连接与淘宝登录。
 - 缺 Key 时指向 `references/mcp-setup.md`，通过 `configure_enterprise_keys.py` 的标准输入/隐藏输入配置。不要让用户自行配置环境变量，不复述密钥。`FN_API_KEY` 等不得进入参数、日志、Git、输出或截图。风鸟底层由 `run_fengniao.py` 注入用户级凭证。
 - 审核模式使用 `bootstrap.ps1 -AuditOnly`，不要求企业 Key；浏览器必须就绪。类目发现和审核均需 Browser Bridge 的 `connectivity.ok=true` 及至少一个 `extensionConnected=true` profile，不能只看顶层 `ok=true`。
 - 不接管用户正在工作的标签页。复用原浏览器登录态，仅控制任务专属后台页；独立空Profile不继承登录，不能自动要求用户重新登录。若确实必须前台登录/验证才请用户协助。保持站点规定的访问节奏，风鸟详情间隔至少20秒；遇验证码、滑块、隐藏 `_____tmd__` 或登录失效立即保存状态并停止。`MTOP_REQUEST_TIMEOUT` 有界退出，普通瞬时失败最多重试一次，不重试风控。

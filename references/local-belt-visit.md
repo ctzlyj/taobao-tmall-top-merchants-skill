@@ -44,7 +44,7 @@
 
 清单落在 JoySpace 在线表格（`joyspace.jd.com/sheets/`，pageType=18 新版传统表格，可读写）时按以下规则执行：
 
-- 使用 JoySpace CLI `~/.joycode/skills/joyspace-access/scripts/joyspace_cli.py`；本机必须先设 `JOYSPACE_PYTHON=C:/Users/caotong.888/AppData/Local/Programs/Python/Python312/python.exe`（默认指向的 `D:/Miniconda3/python.exe` 不存在，不设必失败）。
+- 使用 JoySpace CLI `~/.joycode/skills/joyspace-access/scripts/joyspace_cli.py`；若默认解释器不可用，先用 `Get-Command python` 确认本机 Python 3.11+ 的实际路径，再把 `JOYSPACE_PYTHON` 临时指向该路径（只写本机存在的解释器，不写死他人路径）。
 - `sh-read` 不带 `--row-from/--row-to` 只返回前 10 行；读全表必须显式指定行范围，多 sheet 用 `--ws` 选定（第一个 sheet 通常 `--ws 1`）。
 - 落盘编码先看来源：CLI 自写 JSON 用 `utf-8-sig` 读；经 PowerShell `>` 重定向的输出是 UTF-16，不能当纯 utf-8 读。中文脚本写 `.py` 执行，勿在 PowerShell 内联中文。
 - 同一 sheet 可能纵向叠加多个清单区块（用户多次粘贴/筛选不同来源），各区块列位不同。实测三种布局：A 块公司=c3/电话=c7/法人=c5/地址=c6；B 块公司=c1/电话=c6；C 块公司=c1/电话=c5。必须按区块分别解析并逐行记录电话列号；发现字段错位（如"法人"列出现"专利"或邮箱）时**只写电话列，不动其他列**。

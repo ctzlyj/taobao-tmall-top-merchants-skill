@@ -29,17 +29,29 @@
 
 ## 安装
 
-```bash
-git clone https://github.com/CTctikki/taobao-tmall-top-merchants-skill.git
-```
-
-将仓库目录复制或链接到 `$CODEX_HOME/skills/taobao-tmall-top-merchants`（默认 `~/.codex/skills/`），重启 Codex 后使用：
+推荐从 SkillHub 安装（SkillHub ID 10749）。新电脑上已登录 JoyCode/O2 时，直接对助手说一句话：
 
 ```text
-$taobao-tmall-top-merchants 按摩梳
+请根据 https://o2.jd.com/install-skill.md，安装 skillId 10749@最新版本，然后帮我查询xxx公司的联系方式
 ```
 
-也可以直接粘贴店铺名称或多个店铺链接，或附上任意结构的名单文件并要求整理最终招商表。
+也可以用命令行安装：
+
+```bash
+o2 launch oxygenskills -- add 10749@1.1.0
+```
+
+安装位置兼容 `~/.joycode/skills`、`~/.codex/skills`、`~/.agents/skills` 和 `skill-<id>` 目录；脚本自动定位自身路径，不依赖任何个人盘符或固定端口。
+
+源码仓库：<https://github.com/ctzlyj/taobao-tmall-top-merchants-skill>
+
+## 首次自检（安装后第一步）
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1
+```
+
+自检覆盖 Python/依赖、o2/WebCLI/浏览器连接、淘宝登录状态和工作目录权限；缺项会输出采销可照做的中文下一步，看到 JSON `"ok": true` 即通过。浏览器检查只读、走后台标签，不碰工作浏览器，也不调用付费接口。成功后可直接粘贴店铺名称、多个店铺链接或任意结构的名单文件下达任务；结果文件与证据 JSON 写在当前工作目录，未核字段标注“未确认”。
 
 API模式首次运行会自动执行环境检查；浏览器只读模式不要执行以下付费API预检。API模式也可以手动运行：
 
