@@ -2,6 +2,9 @@ import unittest
 from pathlib import Path
 
 import sys
+import json
+import tempfile
+from unittest.mock import Mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,6 +55,38 @@ class BrowserEnterpriseContractTests(unittest.TestCase):
                 "credit_code": "91320382MA000000X1",
                 "source_url": "https://example.com/ent/x.html?entid=abc123",
             })
+
+    def test_login_gate_surfaces_user_action_instead_of_silent_auth_required(self):
+        from browser_enterprise import BrowserStopped, run_browser_pipeline
+
+        with tempfile.TemporaryDirectory() as directory:
+            job = Path(directory)
+            (job / "browser_targets.json").write_text(json.dumps([{
+                "shop_name": "示例市星辰日用品有限公司",
+                "company": "示例市星辰日用品有限公司",
+                "credit_code": "91320382MA000000X1",
+                "source_url": "https://www.riskbird.com/ent/%E7%A4%BA%E4%BE%8B.html?entid=abc123",
+            }], ensure_ascii=False), encoding="utf-8")
+            provider = Mock()
+            provider.read.side_effect = BrowserStopped("AUTH_REQUIRED")
+
+            result = run_browser_pipeline(job, execute=True, limit=1, provider=provider)
+
+        self.assertEqual(result["status"], "paused")
+        self.assertEqual(result["pending"][0]["reason"], "AUTH_REQUIRED")
+        action = result["user_action"]
+        self.assertEqual(action["action"], "login")
+        self.assertIn("登录", action["message"])
+        self.assertEqual(action["site"], "riskbird")
+        self.assertEqual(action["shop_name"], "示例市星辰日用品有限公司")
+        self.assertTrue(action["source_url"].startswith("https://www.riskbird.com/ent/"))
+
+    def test_login_gate_protocol_is_documented_as_mandatory(self):
+        reference = (ROOT / "references/browser-enterprise.md").read_text(encoding="utf-8")
+        for marker in ("登录/验证门禁必须当场求助用户", "不得静默记录", "user_action", "待登录后补查"):
+            self.assertIn(marker, reference)
+        skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("必须当场提示用户处理", skill)
 
 
 if __name__ == "__main__":

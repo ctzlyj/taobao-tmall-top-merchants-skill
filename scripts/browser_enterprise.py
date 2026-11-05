@@ -17,6 +17,26 @@ STOP_CODES = {
     "INVALID_RESPONSE", "PAGE_NOT_READY", "WEBCLI_UNAVAILABLE", "PAID_SOURCE_REJECTED",
 }
 
+# 门禁类停止必须升级为用户动作，不能静默降级成“没有电话”。
+USER_ACTIONS = {
+    "AUTH_REQUIRED": {
+        "action": "login",
+        "message": "目标站点要求登录：请先在任务浏览器标签完成登录，回复“已登录”后继续原任务；已成功的企业不重复查询。",
+    },
+    "CHALLENGE_REQUIRED": {
+        "action": "captcha",
+        "message": "目标站点触发验证码：请在任务浏览器标签完成验证后回复“已完成”，不要反复刷新。",
+    },
+    "RATE_LIMITED": {
+        "action": "wait",
+        "message": "目标站点限流或当日额度用尽：停止该来源，改用其他已授权来源；不要刷新烧额度。",
+    },
+    "CONTACT_ACCESS_REQUIRED": {
+        "action": "manual",
+        "message": "联系方式被会员/付费墙挡住：不要付费解锁；请用户决定是否人工查看或改用其他免费公开来源交叉验证。",
+    },
+}
+
 
 class BrowserStopped(RuntimeError):
     def __init__(self, reason):
@@ -202,6 +222,14 @@ def run_browser_pipeline(job_dir, execute=False, limit=None, interval=20, provid
         except BrowserStopped as error:
             result.update(status="paused", reason=error.reason)
             result["pending"].extend({"shop_name": pending["shop_name"], "reason": error.reason} for pending in targets[index:])
+            action = USER_ACTIONS.get(error.reason)
+            if action:
+                result["user_action"] = {
+                    **action,
+                    "site": "riskbird",
+                    "shop_name": target["shop_name"],
+                    "source_url": target.get("source_url", ""),
+                }
             break
         except (TimeoutError, subprocess.TimeoutExpired, OSError):
             result["failures"].append({"shop_name": target["shop_name"], "reason": "BROWSER_TRANSPORT_FAILED"})
