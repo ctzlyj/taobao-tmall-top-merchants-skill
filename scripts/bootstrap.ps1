@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [switch]$SkipTaobaoCheck,
     [switch]$ConfigureEnterpriseKeys,
@@ -7,6 +7,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# 统一控制台/Python 输出为 UTF-8，避免 Windows PowerShell 5.1 中文乱码。
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+$env:PYTHONIOENCODING = "utf-8"
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $skillRoot = Split-Path -Parent $scriptRoot
 if ($ConfigureEnterpriseKeys -and -not $AllowPaidApi) {

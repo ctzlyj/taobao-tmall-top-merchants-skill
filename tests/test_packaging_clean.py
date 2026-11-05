@@ -1,4 +1,3 @@
-import re
 import sys
 import tempfile
 import unittest
@@ -69,6 +68,16 @@ class PackagingCleanTests(unittest.TestCase):
         text = (ROOT / "SKILL.md").read_text(encoding="utf-8")
 
         self.assertRegex(text.split("---")[1], r"version:\s*\d+\.\d+\.\d+")
+
+    def test_powershell_scripts_carry_utf8_bom_for_windows_51(self):
+        # Windows PowerShell 5.1 对无 BOM 的 UTF-8 脚本按 ANSI/GBK 解析，
+        # 中文字符串会被截断报错；发布包中的 .ps1 必须带 BOM。
+        for relative in collect_files(ROOT):
+            if relative.suffix.lower() == ".ps1":
+                self.assertTrue(
+                    (ROOT / relative).read_bytes().startswith(b"\xef\xbb\xbf"),
+                    f"missing UTF-8 BOM: {relative}",
+                )
 
 
 if __name__ == "__main__":

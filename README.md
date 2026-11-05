@@ -38,7 +38,7 @@
 也可以用命令行安装：
 
 ```bash
-o2 launch oxygenskills -- add 10749@1.1.0
+o2 launch oxygenskills -- add 10749
 ```
 
 安装位置兼容 `~/.joycode/skills`、`~/.codex/skills`、`~/.agents/skills` 和 `skill-<id>` 目录；脚本自动定位自身路径，不依赖任何个人盘符或固定端口。
